@@ -1,5 +1,46 @@
 #include "my_pthread_t.h"
 
+
+
+
+// ____________________ Struct Defs ________________________
+
+typedef struct Node {
+	ucontext_t * context;
+	struct Node * next;
+	struct Node * prev;
+} Node;
+
+typedef struct {
+	Node * top;
+	Node * bottom;
+	int size;
+} Queue;
+
+
+
+
+// _________________ Utility Functions _____________________
+// Function to get the next context waiting in the Queue
+Node * get_next(Queue * Q) {
+
+}
+
+
+// function to add a context to the Queue
+void enqueue(ucontext_t * context, Queue * Q) {
+
+}
+
+
+//Signal handler to activate the scheduler on periodic SIGALRM
+void scheduler_alarm_handler(int signum) {
+
+}
+
+
+
+
 // __________________ API ____________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
@@ -57,11 +98,3 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 
 }
 
-
-
-// _________________ Utility Functions _____________________
-
-// Signal handler to activate the scheduler on periodic SIGALRM
-void scheduler_alarm_handler(int signum) {
-
-}

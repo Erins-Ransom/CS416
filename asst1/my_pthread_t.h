@@ -41,27 +41,4 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex);
 int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex);
 
 
-
-
-// ____________________ Struct Defs ________________________
-
-typedef struct {
-
-} Node;
-
-typedef struct {
-
-} Queue;
-
-
-
-
-// _________________ Utility Functions _____________________
-
-// Signal handler to activate the scheduler on periodic SIGALRM
-void scheduler_alarm_handler(int signum);
-
-
-
-
 #endif
