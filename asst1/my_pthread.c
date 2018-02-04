@@ -6,7 +6,7 @@
 // ____________________ Struct Defs ________________________
 
 typedef struct Node {
-	my_thread_t * thread;
+	my_pthread_t * thread;
 	struct Node * next;
 	struct Node * prev;
 } Node;
@@ -33,7 +33,7 @@ Queue * make_queue() {
 
 
 // Function to get the next context waiting in the Queue
-my_thread_t * get_next(Queue * Q) {
+my_pthread_t * get_next(Queue * Q) {
 	my_thread_t * ret = NULL;
 	Node * temp = Q->top;
 	if (Q->top) {
@@ -50,7 +50,7 @@ my_thread_t * get_next(Queue * Q) {
 
 
 // function to add a context to the Queue
-void enqueue(my_thread_t * thread, Queue * Q) {
+void enqueue(my_pthread_t * thread, Queue * Q) {
 	Node * new = malloc(sizeof(Node));
 	new->thread = thread;
 	new->prev = NULL;
