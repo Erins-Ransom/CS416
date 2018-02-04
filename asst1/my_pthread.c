@@ -11,7 +11,7 @@ typedef struct Node {
 	struct Node * prev;
 } Node;
 
-typedef struct {
+typedef struct Queue {
 	Node * top;
 	Node * bottom;
 	int size;
@@ -21,15 +21,46 @@ typedef struct {
 
 
 // _________________ Utility Functions _____________________
+
+// Function to initialize a Queue
+Queue * make_queue() {
+	Queue * new = malloc(sizeof(Queue));
+	new->top = NULL;
+	new->bottom = NULL;
+	new->size = 0;
+	return new;
+}
+
+
 // Function to get the next context waiting in the Queue
-Node * get_next(Queue * Q) {
+ucontext_t * get_next(Queue * Q) {
+	ucontext_t * ret = NULL;
+	Node * temp = Q->top;
+	if (Q->top) {
+		ret = Q->top->context;
+		Q->top = Q->top->prev;
+		free(temp);
+		Q->size--;
+	}
+	if (Q->size == 0)
+		Q->bottom = NULL;
+	return ret;
 
 }
 
 
 // function to add a context to the Queue
 void enqueue(ucontext_t * context, Queue * Q) {
-
+	Node * new = malloc(sizeof(Node));
+	new->context = context;
+	new->prev = NULL;
+	if (Q->bottom)
+		Q->bottom->prev = new;
+	new->next = Q->bottom;
+	if (!Q->top)
+		Q->top = new;
+	Q->bottom = new;
+	Q->size++;
 }
 
 
