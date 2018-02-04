@@ -6,7 +6,7 @@
 // ____________________ Struct Defs ________________________
 
 typedef struct Node {
-	ucontext_t * context;
+	my_thread_t * thread;
 	struct Node * next;
 	struct Node * prev;
 } Node;
@@ -33,8 +33,8 @@ Queue * make_queue() {
 
 
 // Function to get the next context waiting in the Queue
-ucontext_t * get_next(Queue * Q) {
-	ucontext_t * ret = NULL;
+my_thread_t * get_next(Queue * Q) {
+	my_thread_t * ret = NULL;
 	Node * temp = Q->top;
 	if (Q->top) {
 		ret = Q->top->context;
@@ -50,9 +50,9 @@ ucontext_t * get_next(Queue * Q) {
 
 
 // function to add a context to the Queue
-void enqueue(ucontext_t * context, Queue * Q) {
+void enqueue(my_thread_t * thread, Queue * Q) {
 	Node * new = malloc(sizeof(Node));
-	new->context = context;
+	new->thread = thread;
 	new->prev = NULL;
 	if (Q->bottom)
 		Q->bottom->prev = new;
@@ -62,6 +62,9 @@ void enqueue(ucontext_t * context, Queue * Q) {
 	Q->bottom = new;
 	Q->size++;
 }
+
+
+// Function to initialize the scheduler
 
 
 //Signal handler to activate the scheduler on periodic SIGALRM
