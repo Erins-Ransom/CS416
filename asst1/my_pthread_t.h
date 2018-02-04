@@ -3,6 +3,9 @@
 #define MY_PTHREAD_T
 
 #include <ucontext.h>
+#include <signal.h>
+
+// __________________ API ____________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
 // Pthreads that are waiting for a mutex should be moved to the waiting queue. Threads that can be
@@ -35,6 +38,13 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex);
 
 // Destroys a given mutex. Mutex should be unlocked before doing so.
 int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex);
+
+
+
+// _________________ Utility Functions _____________________
+
+// Signal handler to activate the scheduler on periodic SIGALRM
+void scheduler_alarm_handler(int signum);
 
 
 
