@@ -1,8 +1,6 @@
 #include "my_pthread_t.h"
 
 
-
-
 // ____________________ Struct Defs ________________________
 
 typedef struct Node {
@@ -17,8 +15,16 @@ typedef struct Queue {
 	int size;
 } Queue;
 
+typedef struct my_pthread {
+	int thread_id;		//integer identifier of thread
+	int argc;		//number of arguments in function
+	ucontext_t* ucp;	//execution context of given thread
+} my_pthread_t;
 
+// ___________________ Gobals ______________________________
 
+static ucontext_t scheduler;
+static Queue* Q;
 
 // _________________ Utility Functions _____________________
 
@@ -82,7 +88,22 @@ void scheduler_alarm_handler(int signum) {
 // scheduled to run should be in the running queue.
 
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
-int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {
+int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
+
+	ucontext_t* ucp = malloc(sizeof(ucontext_t));			//probably make this not on the heap at some point
+	my_pthread_t->ucp = ucp;	
+
+	if(getcontext(ucp) == -1) {
+		return -1;
+	}
+	
+	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {
+		return -1;
+	}
+
+	enqueue(thread, Q);
+	
+	return 0;
 
 }
 
