@@ -18,7 +18,7 @@ typedef struct Queue {
 typedef struct my_pthread {
 	int thread_id;		//integer identifier of thread
 	int argc;		//number of arguments in function
-	ucontext_t* ucp;	//execution context of given thread
+	ucontext_t uc;		//execution context of given thread
 } my_pthread_t;
 
 // ___________________ Gobals ______________________________
@@ -79,8 +79,6 @@ void scheduler_alarm_handler(int signum) {
 }
 
 
-
-
 // __________________ API ____________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
@@ -90,8 +88,7 @@ void scheduler_alarm_handler(int signum) {
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
 int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
 
-	ucontext_t* ucp = malloc(sizeof(ucontext_t));			//probably make this not on the heap at some point
-	my_pthread_t->ucp = ucp;	
+	ucontext_t* ucp = &(my_pthread_t->uc);
 
 	if(getcontext(ucp) == -1) {
 		return -1;
@@ -102,9 +99,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	enqueue(thread, Q);
-	
 	return 0;
-
 }
 
 
@@ -118,7 +113,7 @@ void my_pthread_yield() {
 //Explicit call to the my_pthread_t library to end the pthread that called it. If the value_ptr isn't NULL,
 //any return value from the thread will be saved.
 void pthread_exit(void *value_ptr) {
-
+	
 }
 
 
