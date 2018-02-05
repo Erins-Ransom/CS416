@@ -18,6 +18,8 @@ typedef struct Queue {
 typedef struct my_pthread {
 	int thread_id;		//integer identifier of thread
 	int argc;		//number of arguments in function
+	int exit;		//0 if thread is marked active
+	void* ret;		//return value of the thread
 	ucontext_t uc;		//execution context of given thread
 } my_pthread_t;
 
@@ -25,6 +27,7 @@ typedef struct my_pthread {
 
 static ucontext_t scheduler;
 static Queue* Q;
+static void* ret; 			//used to store return value from terminated thread
 
 // _________________ Utility Functions _____________________
 
@@ -36,6 +39,10 @@ Queue * make_queue() {
 	new->size = 0;
 	return new;
 }
+
+// _________________ Macros _______________________________
+
+#define STACK_SIZE 8388608
 
 
 // Function to get the next context waiting in the Queue
@@ -78,6 +85,11 @@ void scheduler_alarm_handler(int signum) {
 
 }
 
+//signal handler to activate the scheduler to store the return value from a terminated thread
+void user1_signal_handler(int signum) {
+	
+}
+
 
 // __________________ API ____________________
 
@@ -93,11 +105,15 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	if(getcontext(ucp) == -1) {
 		return -1;
 	}
+
+	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right?
+	ucp->uc_ss_size = STACK_SIZE
 	
 	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {
 		return -1;
 	}
 
+	thread->exit = 0;
 	enqueue(thread, Q);
 	return 0;
 }
@@ -107,19 +123,31 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 // another can be scheduled if one is waiting.
 void my_pthread_yield() {
 
+	raise(SIGALRM);	
 }
 
 
-//Explicit call to the my_pthread_t library to end the pthread that called it. If the value_ptr isn't NULL,
-//any return value from the thread will be saved.
+// Explicit call to the my_pthread_t library to end the pthread that called it. If the value_ptr isn't NULL,
+// any return value from the thread will be saved.
 void pthread_exit(void *value_ptr) {
-	
+
+	if(value_ptr != NULL) {
+		ret = value_ptr;	//saves value to global variable
+	}
+
+	//somehow the current thread needs to be maked as done
+	raise(SIGUSR1);
 }
 
 
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
+	
+	while(thread.exit == 0) {
+		//waitd for thread to exit
+	}
 
+	return *value_ptr;
 }
 
 
