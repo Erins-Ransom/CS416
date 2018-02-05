@@ -1,6 +1,12 @@
 #include "my_pthread_t.h"
 
 
+// _________________ Macros _______________________________
+
+#define STACK_SIZE 8388608
+
+
+
 // ____________________ Struct Defs ________________________
 
 typedef struct Node {
@@ -23,11 +29,18 @@ typedef struct my_pthread {
 	ucontext_t uc;		//execution context of given thread
 } my_pthread_t;
 
-// ___________________ Gobals ______________________________
+
+
+// ___________________ Globals ______________________________
 
 static ucontext_t scheduler;
-static Queue* Q;
+static Queue* active, * waiting;	// add more active queues for priority levels?  one per level? 
 static void* ret; 			//used to store return value from terminated thread
+static struct * itimerval timer;	// timer to periodically activate the scheduler
+static struct * itimerval pause;	// a zero itimerval used to pause the timer
+static my_pthread_t * running_thread	// reference to the currently running thread
+
+
 
 // _________________ Utility Functions _____________________
 
@@ -39,10 +52,6 @@ Queue * make_queue() {
 	new->size = 0;
 	return new;
 }
-
-// _________________ Macros _______________________________
-
-#define STACK_SIZE 8388608
 
 
 // Function to get the next context waiting in the Queue
@@ -78,17 +87,59 @@ void enqueue(my_pthread_t * thread, Queue * Q) {
 
 
 // Function to initialize the scheduler
+void scheduler_init() {  		// should we return something? int to signal success/error? 
+	// initialize the queues
+	active = make_queue();
+	waiting = make_queue();
+
+	// create a context/thread for main and enqueue it?
+
+	// set up pause and timer to send a SIGVTALRM every 25 usec
+	pause = malloc(sizeof(struct itimerval));
+	pause->it_value.tv_sec = 0;
+	pause->it_value.tv_usec = 0;
+	pause->it_interval.tv_sec = 0;
+	pause->it_interval.tv_usec = 0;
+	timer = malloc(sizeof(struct itimerval));
+	timer->it_value.tv_sec = 0;
+	timer->it_value.tv_usec = 25;
+	timer->it_interval.tv_sec = 0;
+	timer->it_interval.tv_usec = 25;
+	setitimer(ITIMER_VIRTUAL, timer, NULL);
+
+}
 
 
-//Signal handler to activate the scheduler on periodic SIGALRM
+// Function to clean up the scheduler
+void scheduler_clean() {
+
+}
+
+
+//Signal handler to activate the scheduler on periodic SIGVTALRM, this is the body of the scheduler
 void scheduler_alarm_handler(int signum) {
+	// pause the timer
+	setitimer(ITIMER_VIRTUAL, pause, timer);
 
+	// check status of currently running thread
+
+
+	// if needed, select new thread to run
+
+
+	// enqueue or remove the old thread
+
+
+	// resume the timer
+	setitimer(ITIMER_VIRTUAL, timer, NULL);
+	
 }
 
 //signal handler to activate the scheduler to store the return value from a terminated thread
 void user1_signal_handler(int signum) {
-	
+	// I think this will be covered by the above signal handler, but I could be mistaken?
 }
+
 
 
 // __________________ API ____________________
@@ -114,7 +165,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	thread->exit = 0;
-	enqueue(thread, Q);
+	enqueue(thread, active);
 	return 0;
 }
 
@@ -122,8 +173,8 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 // Explicit call to the my_pthread_t scheduler requesting that the current context can be swapped out and
 // another can be scheduled if one is waiting.
 void my_pthread_yield() {
-
-	raise(SIGALRM);	
+	// should set some value/flag, maybe in my_pthread struct, to signal this is a yield
+	raise(SIGVTALRM);	
 }
 
 
