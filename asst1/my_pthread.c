@@ -9,6 +9,8 @@
 
 // ____________________ Struct Defs ________________________
 
+enum thread_status {running, yield, wait_thread, wait_mutex, exit};
+
 typedef struct Node {
 	my_pthread_t * thread;
 	struct Node * next;
@@ -24,10 +26,17 @@ typedef struct Queue {
 typedef struct my_pthread {
 	int thread_id;		//integer identifier of thread
 	int argc;		//number of arguments in function
-	int exit;		//0 if thread is marked active
+	enum thread_status status;	// the threads current status
 	void* ret;		//return value of the thread
+	void* waiting_on_mutex;	// reference to the mutex this thread is waiting on
+	int waiting_on_thread;	// thread_id of the thread this thread is waiting on
 	ucontext_t uc;		//execution context of given thread
 } my_pthread_t;
+
+typedef struct my_pthread_mutex {
+	Queue * waiting;	// queue of threads waiting on this mutex
+	my_pthread_t * user;	// reference to the thread that currently has the mutex, NULL if not claimed
+} my_pthread_mutex_t;
 
 
 
@@ -39,6 +48,7 @@ static void* ret; 			//used to store return value from terminated thread
 static struct * itimerval timer;	// timer to periodically activate the scheduler
 static struct * itimerval pause;	// a zero itimerval used to pause the timer
 static my_pthread_t * running_thread	// reference to the currently running thread
+static short init;			// flag for if the scheduler has been initialized
 
 
 
@@ -122,13 +132,25 @@ void scheduler_alarm_handler(int signum) {
 	setitimer(ITIMER_VIRTUAL, pause, timer);
 
 	// check status of currently running thread
+	switch (running_thread->status) {
+		case running :
 
+			break;
+		case yield :
 
-	// if needed, select new thread to run
+			break;
+		case wait_thread :
 
+			break;
+		case wait_mutex :
 
-	// enqueue or remove the old thread
+			break;
+		case exit :
 
+			break;
+		default :
+
+	}
 
 	// resume the timer
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
@@ -150,6 +172,10 @@ void user1_signal_handler(int signum) {
 
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
 int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
+
+	// check and initialize the scheduler if needed
+	if (!init)
+		scheduler_init();
 
 	ucontext_t* ucp = &(my_pthread_t->uc);
 
@@ -186,17 +212,24 @@ void pthread_exit(void *value_ptr) {
 		ret = value_ptr;	//saves value to global variable
 	}
 
-	//somehow the current thread needs to be maked as done
-	raise(SIGUSR1);
+	// set thread status to and signal the scheduler to take care of it
+	running_thread->status = exit;
+	raise(SIGVTALRM);
 }
 
 
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
+	// pause timer, should this be atomic?
+	setitimer(pause, timer);
 	
-	while(thread.exit == 0) {
-		//waitd for thread to exit
-	}
+	// set status of the current thread
+	running_thread->status = wait_thread;
+	running_thread->waiting_on_thread = thread.thread_id;
+
+	// resume timer and signal so another thread can be scheduled
+	setitimer(timer, NULL);
+	raise(SIGVTALRM);
 
 	return *value_ptr;
 }
@@ -206,24 +239,79 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 
 // Initializes a my_pthread_mutex_t created by the calling thread. Attributes are ignored.
 int my_pthread_mutex_init(my_pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexattr) {
-
+	mutex->waiting = make_queue();
+	mutex->user = NULL;
+	return 0;
 }
 
 
 // Locks a given mutex, other threads attempting to access this mutex will not run until it is unlocked.
 int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
+	// pause timer, this opperation needs to be atomic
+	setitimer(pause, timer);
 
+	// check whether the mutex is available and assign it or add the thread to the mutex queue
+	if (mutex->user == running_thread) { 
+		// already have the lock, resume the clock and return
+		setitimer(timer, NULL);
+		return 0;
+	} else if (mutex->user) {
+		// the mutex is claimed, so we need to wait for it
+		enqueu(running_thread, mutex->waiting);
+		// mark the thread as waiting
+		running_thread->status = wait_mutex;
+		running_thread->waiting_on = mutex;
+		// resume timer and signal so another thread can be scheduled
+		setitimer(timer, NULL);
+		raise(SIGVTALRM);
+		return 0;
+	} else {
+		mutex->user = running_thread;
+	}
+	// resume timer
+	setitimer(timer, NULL);
+	return 0;
 }
 
 
 // Unlocks a given mutex.
 int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
+	// should we make the thread lock the mutex before it can unlock it or do we leave it to the user to use the mutex properly?
+	int exit_code = my_pthread_mutex_lock(mutex);
+	if (exit_code)
+		return exit_code;
 
+	// pause timer, this needs to be atomic
+	setitimer(pause, timer);
+
+	// check that the given thread has the mutex
+	if (mutex->user == running_thread) {
+		mutex->user = NULL;
+	else // Huston, we have a problem. 
+		exit_code = -1;
+
+	// resume the timer and return
+	setitimer(timer, NULL);
+	return exit_code;
 }
 
 
 // Destroys a given mutex. Mutex should be unlocked before doing so.
 int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
+// questions on semantics:
+//	- should a thread need to claim/lock a mutex before destroying it?
+//	- do we leave it on the user to be safe?
 
+
+	// pause timer, does this need to be atomic?
+	setitimer(pause, timer);
+
+	// clean up the mutex and unlock it
+	free(mutex->waiting);
+	mutex->user = NULL;
+
+	// resume timer and return
+	setitimer(timer, NULL);
+	return 0;
 }
 
