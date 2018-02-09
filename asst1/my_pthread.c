@@ -28,7 +28,7 @@ typedef struct my_pthread {
 	int argc;		//number of arguments in function
 	enum thread_status status;	// the threads current status
 	void* ret;		//return value of the thread
-	int waiting_on_thread;	// thread_id of the thread this thread is waiting on
+	struct my_pthread * waiting;	// reference to a thread waiting on this thread to exit, otherwise NULL
 	ucontext_t uc;		//execution context of given thread
 } my_pthread_t;
 
@@ -81,8 +81,9 @@ my_pthread_t * get_next(Queue * Q) {
 }
 
 
+// Don't think we need this
 // Function to retrieve the thread waiting on a given thread_id from the waiting Queue
-my_pthread_t * get_waiting_thread(int thread_id) {
+/* my_pthread_t * get_waiting_thread(int thread_id) {
 	Node * ptr = waiting->top;
 	my_pthread_t * ret = NULL;
 
@@ -107,7 +108,7 @@ my_pthread_t * get_waiting_thread(int thread_id) {
 	}
 
 	return ret;
-}
+} */
 
 // function to add a context to the Queue
 void enqueue(my_pthread_t * thread, Queue * Q) {
@@ -124,13 +125,25 @@ void enqueue(my_pthread_t * thread, Queue * Q) {
 }
 
 
+// Function to assign thread_id
+int get_ID() {
+
+}
+
+
+// Funtion to free a thread_id, do we need this?
+void free_ID(int thread_id) {
+
+}
+
+
 // Function to initialize the scheduler
 void scheduler_init() {  		// should we return something? int to signal success/error? 
 	// initialize the queues
 	active = make_queue();
-	waiting = make_queue();
+	//waiting = make_queue();	// I think we can get rid of the waiting queue
 
-	// create a context/thread for main and enqueue it?
+	// create a context/thread for main and set it as runnning_thread
 
 	// set up pause and timer to send a SIGVTALRM every 25 usec
 	pause = malloc(sizeof(struct itimerval));
@@ -178,7 +191,7 @@ void scheduler_alarm_handler(int signum) {
 
 		case wait_thread :
 			// move running thread to the waiting queue
-			enqueu(running_thread, waiting);
+			// enqueu(running_thread, waiting);
 
 			break;
 
@@ -228,6 +241,9 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	if (!init)
 		scheduler_init();
 
+	// pause the timer, this should be atomic
+	setitimer(ITIMER_VIRTUAL, pause, cont);
+
 	ucontext_t* ucp = &(my_pthread_t->uc);
 
 	if(getcontext(ucp) == -1) {
@@ -241,8 +257,14 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
-	thread->exit = 0;
+	thread->thread_id = get_ID();  // how are we assigning IDs?
+	thread->ret = NULL;
+	thread->waiting = NULL;
+	thread->status = running;
 	enqueue(thread, active);
+
+	// resume timer
+	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	return 0;
 }
 
@@ -277,7 +299,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	
 	// set status of the current thread
 	running_thread->status = wait_thread;
-	running_thread->waiting_on_thread = thread.thread_id;
+	thread.waiting = running_thread;
 
 	// resume timer and signal so another thread can be scheduled
 	setitimer(ITIMVER_VIRTUAL, cont, NULL);
