@@ -45,6 +45,7 @@ typedef struct my_pthread_mutex {
 static ucontext_t main_context;			//execution context for main 
 static Queue* priority_level[NUM_PRIORITY]; 	//array of pointers to queues associated with static priority levels
 static int current_priority;			// current piority level that is being run
+static int run_at_priority;			// threads run at the current priority
 static void* ret; 				//used to store return value from terminated thread
 static struct * itimerval timer;		// timer to periodically activate the scheduler
 static struct * itimerval pause;		// a zero itimerval used to pause the timer
@@ -243,11 +244,16 @@ void scheduler_alarm_handler(int signum) {
 
 	}
 
+	// update the priority counters
+	if (run_at_priority++ > current_priority) {
+		current_priority = (current_priority + 1)%NUM_PRIORITY;
+		run_at_priority = 0;
+	}
+
 	// select new thread to run and set it as the running thread then swap to the new context
-	current_priority = (current_priority + 1)%NUM_PRIORITY;
-	my_pthread_t * last = running_thread;
+	my_pthread_t * prev_thread = running_thread;
 	running_thread = get_next(priority_level[current_priority]);
-	swapcontext(last->uc, running_thread->uc);
+	swapcontext(prev_thread->uc, running_thread->uc);
 
 	// reset the timer
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
