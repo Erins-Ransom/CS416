@@ -25,6 +25,8 @@ typedef struct Queue {
 
 typedef struct my_pthread {
 	int thread_id;			//integer identifier of thread
+	int priority;			// current priority level of this thread
+	int intervals_run;		// the number of concecutive intervals this thread has run
 	enum thread_status status;	// the threads current status
 	void* ret;			//return value of the thread
 	struct my_pthread * waiting;	// reference to a thread waiting on this thread to exit, otherwise NULL
@@ -42,6 +44,7 @@ typedef struct my_pthread_mutex {
 
 static ucontext_t main_context;			//execution context for main 
 static Queue* priority_level[NUM_PRIORITY]; 	//array of pointers to queues associated with static priority levels
+static int current_priority;			// current piority level that is being run
 static void* ret; 				//used to store return value from terminated thread
 static struct * itimerval timer;		// timer to periodically activate the scheduler
 static struct * itimerval pause;		// a zero itimerval used to pause the timer
@@ -143,10 +146,12 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	//initialize queues representing priority levels
 	int i;
 	for(i = 0; i < NUM_PRIORITY; i++) {
-		priority_levl[i] = make_queue();
+		priority_level[i] = make_queue();
 	}
 
 	// create a context/thread for main and set it as runnning_thread
+	running_thread = malloc(sizeof(my_pthread_t));
+
 	if(getcontext(&main_context) == -1) {
                 return -1;
         }
@@ -155,7 +160,10 @@ int scheduler_init() {  		// should we return something? int to signal success/e
                 return -1;
         }
 
-	running_thread = main_context;
+	running_thread->uc = main_context;
+	running_thread->status = running;
+	running_thread->priority = 0;
+	running_thread->intervals_run = 0;
 
 	// set up pause and timer to send a SIGVTALRM every 25 usec
 	pause = malloc(sizeof(struct itimerval));
@@ -194,21 +202,25 @@ void scheduler_alarm_handler(int signum) {
 	// check status of currently running thread
 	switch (running_thread->status) {
 		case running :
-			// check timer to see if it has finished, enqueue the running thread it if it has
-			if (   ) { // was stopped prematurely
-				setitimer(ITIMER_VIRTUAL, cont, NULL);
+			// check if the thread has finished its alotted time, if not increment its interval counter and resume
+			if (running_thread->intervals_run < ) { // was stopped prematurely
+				setitimer(ITIMER_VIRTUAL, timer, NULL);
 				return;
 			}
+			// otherwise, drop the priority level and enqueu
+			running_thread->intervals_run = 0;
+			running_thread->priority = (running_thread->priority + 1)%NUM_PRIORITY; // if its at the bottom, gets moved back to the top
 
 		case yield :
-			// enqueue the current thread in the active queue
-			enqueue(running_thread, active);
+			// enqueue the current thread back in the same priority level
+			enqueue(running_thread, priority_level[running->thread->priority]);
 
 			break;
 
 		case wait_thread :
-			// move running thread to the waiting queue
+			// move running thread to the waiting queue 
 			// enqueu(running_thread, waiting);
+			// NOTE: waiting queue is obsolete, don't need to do anything here
 
 			break;
 
@@ -219,22 +231,23 @@ void scheduler_alarm_handler(int signum) {
 		case exit :
 			// take care of return values
 
-			// if another thread was waiting on this thread, retrieve and enqueue it in the active queue
-
 			// clean up current thread
 
 			break;
 
 		case embryo :
 			// what do you do here?????
+			// ANSWER: This state is not needed, thread creation is atomic so the scheduler will not interupt it
 
 		default :
 
 	}
 
-	// select new thread to run
-
-	// set it as the currently running thread and switch to its context
+	// select new thread to run and set it as the running thread then swap to the new context
+	current_priority = (current_priority + 1)%NUM_PRIORITY;
+	my_pthread_t * last = running_thread;
+	running_thread = get_next(priority_level[current_priority]);
+	swapcontext(last->uc, running_thread->uc);
 
 	// reset the timer
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
@@ -267,24 +280,27 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	// pause the timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	ucontext_t* ucp = &(my_pthread_t->uc);
+	ucontext_t* ucp = &(my_pthread_t->uc); // = thread->uc ?
 
 	if(getcontext(ucp) == -1) {
 		return -1;
 	}
 
+	ucp->uc_link = main_context;
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right?
-	ucp->uc_ss_size = STACK_SIZE
+	ucp->uc_stack_ss_size = STACK_SIZE;
 	
-	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {
+	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {  // thread->argc ?
 		return -1;
 	}
 
 	thread->thread_id = get_ID();  // how are we assigning IDs?
+	thread->priority = 0;
+	thread->intervals_run = 0;
 	thread->ret = NULL;
 	thread->waiting = NULL;
 	enqueue(thread, priority_level[0]);
-	thread->status = running; 	//keep thread in the embryo state until it is added to the queue
+	thread->status = running;
 
 	// resume timer
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
