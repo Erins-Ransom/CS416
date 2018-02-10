@@ -52,6 +52,7 @@ static struct * itimerval pause;		// a zero itimerval used to pause the timer
 static struct * itimerval cont;			// a place to store the current time
 static my_pthread_t * running_thread		// reference to the currently running thread
 static short init;				// flag for if the scheduler has been initialized
+static int thread_count;			// TID's will be sequential starting at 1. Places a hard limit of 2,147,483,647 threads 8^(
 
 
 // _________________ Utility Functions _____________________
@@ -131,11 +132,13 @@ void enqueue(my_pthread_t * thread, Queue * Q) {
 
 // Function to assign thread_id
 int get_ID() {
-
+	int TID = thread_count;
+	thread_count += 1;
+	return TID;
 }
 
 
-// Funtion to free a thread_id, do we need this?
+// Funtion to free a thread_id, do we need this? No.
 void free_ID(int thread_id) {
 
 }
@@ -143,6 +146,8 @@ void free_ID(int thread_id) {
 
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
+
+	thread_counter = 1;
 	
 	//initialize queues representing priority levels
 	int i;
@@ -286,17 +291,17 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	// pause the timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	ucontext_t* ucp = &(my_pthread_t->uc); // = thread->uc ?
+	ucontext_t* ucp = &(my_pthread_t->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
 
 	if(getcontext(ucp) == -1) {
 		return -1;
 	}
 
 	ucp->uc_link = main_context;
-	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right?
+	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);
 	ucp->uc_stack_ss_size = STACK_SIZE;
 	
-	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {  // thread->argc ?
+	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
 		return -1;
 	}
 
