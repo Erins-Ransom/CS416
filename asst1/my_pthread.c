@@ -11,6 +11,11 @@
 
 enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
 
+typedef struct tid_node {
+	int tid;
+	struct tid_node* next;
+} tid_node_t;
+
 typedef struct Node {
 	my_pthread_t * thread;
 	struct Node * next;
@@ -52,7 +57,8 @@ static struct * itimerval pause;		// a zero itimerval used to pause the timer
 static struct * itimerval cont;			// a place to store the current time
 static my_pthread_t * running_thread		// reference to the currently running thread
 static short init;				// flag for if the scheduler has been initialized
-static int thread_count;			// TID's will be sequential starting at 1. Places a hard limit of 2,147,483,647 threads 8^(
+static int thread_count;			// Counter to generate new, sequential TIDs
+static tid_node_t * tid_list;			// pointer to front of list of available TIDs
 
 
 // _________________ Utility Functions _____________________
@@ -100,24 +106,42 @@ void enqueue(my_pthread_t * thread, Queue * Q) {
 
 // Function to assign thread_id
 int get_ID() {
-	int TID = thread_count;
-	thread_count += 1;
+
+	int tid;
+	tid_node_t * ptr;	
+
+	if(tid_list == NULL) {			//if the list is empty, issue a new ID
+		tid = thread_count;
+		thread_count++;
+	} else {				//otherwise, take a recycled ID from the list
+		ptr = tid_list;
+		tid_list = tid_list->next;
+		TID = ptr->tid;
+		free(ptr);	
+	}
+
 	return TID;
 }
 
 
-// Funtion to free a thread_id, do we need this? No.
-/*
+// Funtion to free a thread_id
 void free_ID(int thread_id) {
-
+	
+	// create new node to hold available id, place at the front of the list
+	tid_node_t * ptr = malloc(sizeof(tid_node_t));	
+	ptr->tid = thread_id;
+	ptr->next = tid_list;
+	tid_list = ptr;
+	return;
 }
-*/
+
 
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
-	thread_counter = 1;
-	
+	thread_counter = 1;		//start threads at 1
+	tid_list = NULL;		//list starts empty
+		
 	//initialize queues representing priority levels
 	int i;
 	for(i = 0; i < NUM_PRIORITY; i++) {
