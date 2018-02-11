@@ -9,7 +9,7 @@
 
 // ____________________ Struct Defs ________________________
 
-enum thread_status {running, yield, wait_thread, wait_mutex, unlock, exit, embryo};
+enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
 
 typedef struct Node {
 	my_pthread_t * thread;
@@ -83,38 +83,6 @@ my_pthread_t * get_next(Queue * Q) {
 
 }
 
-
-// Don't think we need this
-// Function to retrieve the thread waiting on a given thread_id from the waiting Queue
-/* 
-my_pthread_t * get_waiting_thread(int thread_id) {
-	Node * ptr = waiting->top;
-	my_pthread_t * ret = NULL;
-
-	while (prt && ptr->thread->thread_id != thread_id)
-		ptr = ptr->prev;
-
-	if (ptr) {
-		ret = ptr->thread;
-		if (ptr->prv)
-			ptr->prev->next = ptr->next;
-		else if (ptr->next)
-			ptr->next->prev = NULL;
-		if (ptr->next)
-			ptr->next->prev = ptr->prev;
-		else if (ptr->prev)
-			ptr->prev->next = NULL;
-
-		free(ptr);
-		waiting->size--;
-		if (!waiting->size)
-			waiting->top = waiting->bottom = NULL;
-	}
-
-	return ret;
-} 
-*/
-
 // function to add a context to the Queue
 void enqueue(my_pthread_t * thread, Queue * Q) {
 	Node * new = malloc(sizeof(Node));
@@ -139,10 +107,11 @@ int get_ID() {
 
 
 // Funtion to free a thread_id, do we need this? No.
+/*
 void free_ID(int thread_id) {
 
 }
-
+*/
 
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
@@ -234,10 +203,13 @@ void scheduler_alarm_handler(int signum) {
 			// don't really need to do anything here?
 			break;
 
-		case exit :
+		case thread_exit :
 			// take care of return values
+			ret = running_thread->ret;
 
 			// clean up current thread
+			free(running_thread->uc.uc_stack.ss_sp)	//free stack space
+			free (running_thread);
 
 			break;
 
@@ -305,7 +277,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
-	thread->thread_id = get_ID();  // how are we assigning IDs?
+	thread->thread_id = get_ID();  // how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
