@@ -234,7 +234,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
-	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right?
+	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
 	ucp->uc_ss_size = STACK_SIZE
 	
 	if(makecontext(ucp, function, my_pthread_t->argc) == -1) {
