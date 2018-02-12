@@ -10,7 +10,7 @@
 
 // ____________________ Struct Defs ________________________
 
-enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
+enum thread_status {active, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
 
 typedef struct my_pthread {
         int thread_id;                  //integer identifier of thread

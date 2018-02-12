@@ -161,7 +161,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
         }
 
 	running_thread->uc = main_context;
-	running_thread->status = running;
+	running_thread->status = active;
 	running_thread->priority = 0;
 	running_thread->intervals_run = 0;
 
@@ -201,7 +201,7 @@ void scheduler_alarm_handler(int signum) {
 
 	// check status of currently running thread
 	switch (running_thread->status) {
-		case running :
+		case active :
 			// check if the thread has finished its alotted time, if not increment its interval counter and resume
 			if (running_thread->intervals_run < ) { // was stopped prematurely
 				setitimer(ITIMER_VIRTUAL, timer, NULL);
@@ -231,6 +231,12 @@ void scheduler_alarm_handler(int signum) {
 		case thread_exit :
 			// take care of return values
 			ret = running_thread->ret;
+
+			// if there is a thread waiting on this one, re-activate it
+			if (running_thread->waiting) {
+				running_thread->waiting->status = active;
+				enqueu(running_thread->waiting, priority_level[running_thread->waiting->priority]);
+			}
 
 			// clean up current thread
 			free(running_thread->uc.uc_stack.ss_sp)	//free stack space
@@ -294,14 +300,11 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
-<<<<<<< HEAD
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
-	ucp->uc_ss_size = STACK_SIZE
-=======
+	ucp->uc_ss_size = STACK_SIZE;
 	ucp->uc_link = main_context;
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);
 	ucp->uc_stack_ss_size = STACK_SIZE;
->>>>>>> b3615e41f11382b8ada7ff96d0b06613efac89bd
 	
 	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
 		return -1;
@@ -313,7 +316,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	thread->ret = NULL;
 	thread->waiting = NULL;
 	enqueue(thread, priority_level[0]);
-	thread->status = running;
+	thread->status = active;
 
 	// resume timer
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
@@ -419,8 +422,8 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	// give the lock to the next in line and reactivate them
 	my_pthread_mutex_t * next = get_next(mutex->queue);
 	if (next) {
-		next->status = running;
-		enqueu(next, active);
+		next->status = active;
+		enqueu(next, priority_level[next->priority]);
 	}
 
 	// resume the timer and return
@@ -443,7 +446,7 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 	my_pthread_t * temp;
 	while (mutex->size) {
 		temp = get_next(mutex->waiting);
-		temp->status = running;
+		temp->status = active;
 		enqueu(temp, prioritiy_level[temp->priority]);
 	}
 	free(mutex->waiting);
