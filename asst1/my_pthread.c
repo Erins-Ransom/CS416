@@ -346,7 +346,8 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	
 	// set status of the current thread
 	running_thread->status = wait_thread;
-	thread.waiting = search(thread.thread_id, priority_level);	//need a function that searches the queue for a given thread by TID
+	thread.waiting = running_thread;  // the thread that called is the one waiting on this thread, no search required
+//	thread.waiting = search(thread.thread_id, priority_level);	//need a function that searches the queue for a given thread by TID
 
 	// resume timer and signal so another thread can be scheduled
 	setitimer(ITIMVER_VIRTUAL, cont, NULL);
@@ -434,6 +435,12 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// clean up the mutex and unlock it
+	my_pthread_t * temp;
+	while (mutex->size) {
+		temp = get_next(mutex->waiting);
+		temp->status = running;
+		enqueu(temp, prioritiy_level[temp->priority]);
+	}
 	free(mutex->waiting);
 	mutex->user = NULL;
 
