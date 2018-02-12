@@ -6,6 +6,48 @@
 #include <signal.h>
 #include <sys/time.h>
 
+
+
+// ____________________ Struct Defs ________________________
+
+enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
+
+typedef struct my_pthread {
+        int thread_id;                  //integer identifier of thread
+        int priority;                   // current priority level of this thread
+        int intervals_run;              // the number of concecutive intervals this thread has run
+        enum thread_status status;      // the threads current status
+        void* ret;                      //return value of the thread
+        struct my_pthread * waiting;    // reference to a thread waiting on this thread to exit, otherwise NULL
+        ucontext_t uc;                  //execution context of given thread
+} my_pthread_t;
+
+typedef struct tid_node {
+        int tid;
+        struct tid_node* next;
+} tid_node_t;
+
+typedef struct Node {
+        my_pthread_t * thread;
+        struct Node * next;
+        struct Node * prev;
+} Node;
+
+typedef struct Queue {
+        Node * top;
+        Node * bottom;
+        int size;
+} Queue;
+
+typedef struct my_pthread_mutex {
+        Queue * waiting;                // queue of threads waiting on this mutex
+        my_pthread_t * user;            // reference to the thread that currently has the mutex, NULL if not claimed
+} my_pthread_mutex_t;
+
+
+
+
+
 // ______________________ API _________________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
