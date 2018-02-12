@@ -8,7 +8,8 @@
 
 
 // ____________________ Struct Defs ________________________
-
+//             * MOVED TO THE HEADER FILE *
+/* 
 enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
 
 typedef struct tid_node {
@@ -42,7 +43,7 @@ typedef struct my_pthread_mutex {
 	Queue * waiting;		// queue of threads waiting on this mutex
 	my_pthread_t * user;		// reference to the thread that currently has the mutex, NULL if not claimed
 } my_pthread_mutex_t;
-
+*/
 
 
 // ___________________ Globals ______________________________
