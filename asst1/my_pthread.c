@@ -294,9 +294,14 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
+<<<<<<< HEAD
+	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
+	ucp->uc_ss_size = STACK_SIZE
+=======
 	ucp->uc_link = main_context;
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);
 	ucp->uc_stack_ss_size = STACK_SIZE;
+>>>>>>> b3615e41f11382b8ada7ff96d0b06613efac89bd
 	
 	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
 		return -1;
