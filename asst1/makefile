@@ -8,4 +8,4 @@ test.o:
 	gcc -g -c test.c
 
 clean:
-	rm test
+	rm test.o my_pthread.o test
