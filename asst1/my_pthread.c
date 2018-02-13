@@ -53,10 +53,10 @@ static Queue* priority_level[NUM_PRIORITY]; 	//array of pointers to queues assoc
 static int current_priority;			// current piority level that is being run
 static int run_at_priority;			// threads run at the current priority
 static void* ret; 				//used to store return value from terminated thread
-static struct * itimerval timer;		// timer to periodically activate the scheduler
-static struct * itimerval pause;		// a zero itimerval used to pause the timer
-static struct * itimerval cont;			// a place to store the current time
-static my_pthread_t * running_thread		// reference to the currently running thread
+static struct itimerval * timer;		// timer to periodically activate the scheduler
+static struct itimerval * pause;		// a zero itimerval used to pause the timer
+static struct itimerval * cont;			// a place to store the current time
+static my_pthread_t * running_thread;		// reference to the currently running thread
 static short init;				// flag for if the scheduler has been initialized
 static int thread_count;			// Counter to generate new, sequential TIDs
 static tid_node_t * tid_list;			// pointer to front of list of available TIDs
@@ -76,10 +76,10 @@ Queue * make_queue() {
 
 // Function to get the next context waiting in the Queue
 my_pthread_t * get_next(Queue * Q) {
-	my_thread_t * ret = NULL;
+	my_pthread_t * ret = NULL;
 	Node * temp = Q->top;
 	if (Q->top) {
-		ret = Q->top->context;
+		ret = Q->top->thread;
 		Q->top = Q->top->prev;
 		free(temp);
 		Q->size--;
@@ -117,11 +117,11 @@ int get_ID() {
 	} else {				//otherwise, take a recycled ID from the list
 		ptr = tid_list;
 		tid_list = tid_list->next;
-		TID = ptr->tid;
+		tid = ptr->tid;
 		free(ptr);	
 	}
 
-	return TID;
+	return tid;
 }
 
 
@@ -140,7 +140,7 @@ void free_ID(int thread_id) {
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
-	thread_counter = 1;		//start threads at 1
+	thread_count = 1;		//start threads at 1
 	tid_list = NULL;		//list starts empty
 		
 	//initialize queues representing priority levels
@@ -156,10 +156,12 @@ int scheduler_init() {  		// should we return something? int to signal success/e
                 return -1;
         }
 
+/*	Don't think we need this, I beleive it will get set when the scheduler calls swapcontext()
+
         if(makecontext(&main_context, main, 2) == -1) {
                 return -1;
         }
-
+*/
 	running_thread->uc = main_context;
 	running_thread->status = active;
 	running_thread->priority = 0;
@@ -203,7 +205,7 @@ void scheduler_alarm_handler(int signum) {
 	switch (running_thread->status) {
 		case active :
 			// check if the thread has finished its alotted time, if not increment its interval counter and resume
-			if (running_thread->intervals_run < ) { // was stopped prematurely
+			if (running_thread->intervals_run++ < current_priority) { 
 				setitimer(ITIMER_VIRTUAL, timer, NULL);
 				return;
 			}
@@ -213,7 +215,7 @@ void scheduler_alarm_handler(int signum) {
 
 		case yield :
 			// enqueue the current thread back in the same priority level
-			enqueue(running_thread, priority_level[running->thread->priority]);
+			enqueue(running_thread, priority_level[running_thread->priority]);
 
 			break;
 
@@ -235,12 +237,12 @@ void scheduler_alarm_handler(int signum) {
 			// if there is a thread waiting on this one, re-activate it
 			if (running_thread->waiting) {
 				running_thread->waiting->status = active;
-				enqueu(running_thread->waiting, priority_level[running_thread->waiting->priority]);
+				enqueue(running_thread->waiting, priority_level[running_thread->waiting->priority]);
 			}
 
 			// clean up current thread
-			free(running_thread->uc.uc_stack.ss_sp)	//free stack space
-			free (running_thread);
+			free(running_thread->uc.uc_stack.ss_sp);	//free stack space
+			free(running_thread);
 
 			break;
 
@@ -250,18 +252,24 @@ void scheduler_alarm_handler(int signum) {
 
 		default :
 
+			break;
 	}
 
 	// update the priority counters
-	if (run_at_priority++ > current_priority) {
+	if (run_at_priority++ < NUM_PRIORITY - current_priority) {
 		current_priority = (current_priority + 1)%NUM_PRIORITY;
 		run_at_priority = 0;
 	}
+	
 
 	// select new thread to run and set it as the running thread then swap to the new context
 	my_pthread_t * prev_thread = running_thread;
 	running_thread = get_next(priority_level[current_priority]);
-	swapcontext(prev_thread->uc, running_thread->uc);
+	while (!running_thread) {
+		current_priority = (current_priority + 1)%NUM_PRIORITY;
+		running_thread = get_next(priority_level[current_priority]);
+	}
+	swapcontext(&(prev_thread->uc), &(running_thread->uc));
 
 	// reset the timer
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
@@ -294,22 +302,22 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	// pause the timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	ucontext_t* ucp = &(my_pthread_t->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
+	ucontext_t* ucp = &(thread->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
 
 	if(getcontext(ucp) == -1) {
 		return -1;
 	}
 
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
-	ucp->uc_ss_size = STACK_SIZE;
-	ucp->uc_link = main_context;
-	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);
-	ucp->uc_stack_ss_size = STACK_SIZE;
-	
+	ucp->uc_stack.ss_size = STACK_SIZE;
+	ucp->uc_link = &main_context;
+
+/* 	I don't think we need this, it will be set when the scheduler calls swapcontext()	
+
 	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
 		return -1;
 	}
-
+*/
 	thread->thread_id = get_ID();  // how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
 	thread->intervals_run = 0;
@@ -342,7 +350,7 @@ void pthread_exit(void *value_ptr) {
 	}
 
 	// set thread status to and signal the scheduler to take care of it
-	running_thread->status = exit;
+	running_thread->status = thread_exit;
 	raise(SIGVTALRM);
 }
 
@@ -358,10 +366,10 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 //	thread.waiting = search(thread.thread_id, priority_level);	//need a function that searches the queue for a given thread by TID
 
 	// resume timer and signal so another thread can be scheduled
-	setitimer(ITIMVER_VIRTUAL, cont, NULL);
+	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	raise(SIGVTALRM);
 
-	return thread.ret;
+	return *(int *)ret;  // not sure about handling of return values
 }
 
 
@@ -414,16 +422,16 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// check that the given thread has the mutex
-	if (mutex->user == running_thread) {
+	if (mutex->user == running_thread)
 		mutex->user = NULL;
 	else // Huston, we have a problem. 
 		exit_code = -1;
 
 	// give the lock to the next in line and reactivate them
-	my_pthread_mutex_t * next = get_next(mutex->queue);
+	my_pthread_t * next = get_next(mutex->waiting);
 	if (next) {
 		next->status = active;
-		enqueu(next, priority_level[next->priority]);
+		enqueue(next, priority_level[next->priority]);
 	}
 
 	// resume the timer and return
@@ -444,10 +452,10 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 
 	// clean up the mutex and unlock it
 	my_pthread_t * temp;
-	while (mutex->size) {
+	while (mutex->waiting->size) {
 		temp = get_next(mutex->waiting);
 		temp->status = active;
-		enqueu(temp, prioritiy_level[temp->priority]);
+		enqueue(temp, priority_level[temp->priority]);
 	}
 	free(mutex->waiting);
 	mutex->user = NULL;

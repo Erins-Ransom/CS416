@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
+#include "my_pthread_t.h"
 #define MAXTHREADS 1000
 
 /********************************************
@@ -65,6 +65,7 @@ void *geometric_sum()
 	}
 	
 	printf("the result of the geometric series is %d\n", result);
+	pthread_exit(NULL);
 }
 
 /******************************************
@@ -86,8 +87,8 @@ int my_pow(int x, int y)		//my function to calculate the exponential function (I
 
 int main()
 {
-	pthread_t prime_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that determine prime numbers
-	pthread_t geo_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that calculate goemetric series
+	my_pthread_t prime_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that determine prime numbers
+	my_pthread_t geo_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that calculate goemetric series
 	
 	struct arguments args;
 	args.start = 1;				//starting index to search for prime numbers
@@ -103,12 +104,13 @@ int main()
 	}
 	*/
 
-	pthread_create(&geo_threads[0], NULL, &geometric_sum, NULL); //call function in a new thread
-	pthread_join(geo_threads[0], NULL);
+	my_pthread_create(&geo_threads[0], NULL, &geometric_sum, NULL); //call function in a new thread
+	my_pthread_join(geo_threads[0], NULL);
+
 	/*
 	i = 0;
 	for(i ; i < 100; i++)
-		pthread_join(prime_threads[i], NULL);
+		my_pthread_join(prime_threads[i], NULL);
 	*/
 }
 

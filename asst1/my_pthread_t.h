@@ -2,6 +2,7 @@
 #ifndef MY_PTHREAD_T
 #define MY_PTHREAD_T
 
+#include <stdlib.h>
 #include <ucontext.h>
 #include <signal.h>
 #include <sys/time.h>
