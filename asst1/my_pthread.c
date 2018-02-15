@@ -324,8 +324,9 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	// pause the timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	//ucontext_t* ucp = &(thread->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
-	ucontext_t* ucp = &(thread);   //Is this the current way to set the a ucontext for the incoming thread?
+	ucontext_t* ucp = &(thread->uc);
+
+	//ucontext_t* ucp = &(thread);   //Is this the current way to set the a ucontext for the incoming thread? This is incorrect; type mismatch
 
 	if(getcontext(ucp) == -1) {
 		return -1;
