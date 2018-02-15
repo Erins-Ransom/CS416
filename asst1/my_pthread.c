@@ -181,6 +181,9 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	cont = malloc(sizeof(struct itimerval));
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
 
+	// activate the scheduler
+	signal(SIGVTALRM, scheduler_alarm_handler);
+
 	return 0;
 }
 
