@@ -87,8 +87,9 @@ int my_pow(int x, int y)		//my function to calculate the exponential function (I
 
 int main()
 {
-	my_pthread_t prime_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that determine prime numbers
-	my_pthread_t geo_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that calculate goemetric series
+	printf("right before array creation\n");
+	//my_pthread_t prime_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that determine prime numbers
+	//my_pthread_t geo_threads[MAXTHREADS];		//for pthread create to keep track of TIDs that calculate goemetric series
 	
 	struct arguments args;
 	args.start = 1;				//starting index to search for prime numbers
@@ -103,9 +104,11 @@ int main()
 		args.end += 200;		//thse lines can (will) cause synchonization problems
 	}
 	*/
-
-	my_pthread_create(&geo_threads[0], NULL, &geometric_sum, NULL); //call function in a new thread
-	my_pthread_join(geo_threads[0], NULL);
+	
+	printf("right before thread creation\n");
+	
+	//my_pthread_create(&geo_threads[0], NULL, &geometric_sum, NULL); //call function in a new thread
+	//my_pthread_join(geo_threads[0], NULL);
 
 	/*
 	i = 0;

@@ -140,46 +140,65 @@ void free_ID(int thread_id) {
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
-	thread_count = 1;		//start threads at 1
+	thread_count = 1;		//generates the first TID which will be 1
 	tid_list = NULL;		//list starts empty
 		
 	//initialize queues representing priority levels
+	//NUM_PRIORITY = 5 so this will make 6 (0-5) new queues
 	int i;
 	for(i = 0; i < NUM_PRIORITY; i++) {
 		priority_level[i] = make_queue();
 	}
 
-	// create a context/thread for main and set it as runnning_thread
-	running_thread = malloc(sizeof(my_pthread_t));
+	/*****************************************************
+ 	 * The below block of code creates a thread for main *
+	 * and sets it as the running thread                 *
+	 * this block of code will end at the next           *
+	 * block of comments		                     *
+	 *****************************************************/
+	running_thread = malloc(sizeof(my_pthread_t));		//malloc a block of memory for the currently running thread
 
-	if(getcontext(&main_context) == -1) {
+	if(getcontext(&main_context) == -1) {			//initializes main_context 
                 return -1;
         }
 
-/*	Don't think we need this, I beleive it will get set when the scheduler calls swapcontext()
+			/*	Don't think we need this, I beleive it will get set when the scheduler calls swapcontext()
 
-        if(makecontext(&main_context, main, 2) == -1) {
-                return -1;
-        }
-*/
-	running_thread->uc = main_context;
-	running_thread->status = active;
-	running_thread->priority = 0;
-	running_thread->intervals_run = 0;
+			        if(makecontext(&main_context, main, 2) == -1) {
+                			return -1;
+        			}
+			*/
+	running_thread->uc = main_context;			//sets the context of the main_context as the running thread
+	running_thread->status = active;			//sets the status of the main context to active
+	running_thread->priority = 0;				//sets the priority level of the main context to 0 (the highest priority)
+	running_thread->intervals_run = 0;			//initialized the number of time slices main_context has run to 0
+	running_thread->thread_id = 0;				//sets the thread ID for main to 0
+	
+	/****************************************************
+ 	* This ends to block of code where main is set as   *
+ 	* the running thread                                *
+ 	* ***************************************************/
 
 	// set up pause and timer to send a SIGVTALRM every 25 usec
-	pause = malloc(sizeof(struct itimerval));
-	pause->it_value.tv_sec = 0;
-	pause->it_value.tv_usec = 0;
-	pause->it_interval.tv_sec = 0;
-	pause->it_interval.tv_usec = 0;
-	timer = malloc(sizeof(struct itimerval));
-	timer->it_value.tv_sec = 0;
-	timer->it_value.tv_usec = 25;
-	timer->it_interval.tv_sec = 0;
-	timer->it_interval.tv_usec = 25;
-	cont = malloc(sizeof(struct itimerval));
-	setitimer(ITIMER_VIRTUAL, timer, NULL);
+	/******************************************************
+ 	* the below block of code sets up the the itimervalue *
+ 	* for both pause (pause is a zero timer that will be  *
+ 	* used for temporarily stopping the timer) and timer  *
+ 	* (sets the scheduler to go off every 25 milliseconds *
+ 	* This block of code ends at the next block comment   *
+ 	*****************************************************/
+	pause = malloc(sizeof(struct itimerval));		//sets aside memory for the pause timer
+	pause->it_value.tv_sec = 0;				//seconds are not used here
+	pause->it_value.tv_usec = 0;				//this is a pause timer so the timer should no time should be run
+	pause->it_interval.tv_sec = 0;				//seconds are not used here
+	pause->it_interval.tv_usec = 0;				//this is a pause timer so the interval should be 0
+	timer = malloc(sizeof(struct itimerval));		//set aside memory for the timer
+	timer->it_value.tv_sec = 0;				//seconds are not used here
+	timer->it_value.tv_usec = 25;				//the initial time should be 25 microseconds
+	timer->it_interval.tv_sec = 0;				//seconds are not used here
+	timer->it_interval.tv_usec = 25;			//at the experiation of the time the value should be reset to 25 microseconds
+	cont = malloc(sizeof(struct itimerval));		//set aside memoory for he cont timer where the current time will be set at a future point
+	setitimer(ITIMER_VIRTUAL, timer, NULL);			//start the timer
 
 	return 0;
 }
@@ -302,7 +321,8 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	// pause the timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	ucontext_t* ucp = &(thread->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
+	//ucontext_t* ucp = &(thread->uc); // = thread->uc ? I'm pretty sure it's right because the context is actually in the struct. I did that to simplify memory allocation
+	ucontext_t* ucp = &(thread);   //Is this the current way to set the a ucontext for the incoming thread?
 
 	if(getcontext(ucp) == -1) {
 		return -1;
