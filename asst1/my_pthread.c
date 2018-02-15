@@ -200,6 +200,9 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	cont = malloc(sizeof(struct itimerval));		//set aside memoory for he cont timer where the current time will be set at a future point
 	setitimer(ITIMER_VIRTUAL, timer, NULL);			//start the timer
 
+	// activate the scheduler
+	signal(SIGVTALRM, scheduler_alarm_handler);
+
 	return 0;
 }
 
