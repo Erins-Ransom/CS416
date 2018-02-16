@@ -336,12 +336,10 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
-/* 	I don't think we need this, it will be set when the scheduler calls swapcontext()	
-
 	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
 		return -1;
 	}
-*/
+
 	thread->thread_id = get_ID();  // how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
 	thread->intervals_run = 0;
@@ -356,8 +354,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 }
 
 
-// Explicit call to the my_pthread_t scheduler requesting that the current context can be swapped out and
-// another can be scheduled if one is waiting.
+// Explicit call to the scheduler requesting that the current context be swapped out
 void my_pthread_yield() {
 	// set the status of the thread to yield then signal the scheduler
 	running_thread->status = yield;
@@ -381,19 +378,22 @@ void pthread_exit(void *value_ptr) {
 
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
-	// pause timer, should this be atomic?
+	// pause timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 	
 	// set status of the current thread
 	running_thread->status = wait_thread;
 	thread.waiting = running_thread;  // the thread that called is the one waiting on this thread, no search required
-//	thread.waiting = search(thread.thread_id, priority_level);	//need a function that searches the queue for a given thread by TID
+
+	// set the return value
+	if (value_ptr)
+		*value_ptr = ret;
 
 	// resume timer and signal so another thread can be scheduled
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	raise(SIGVTALRM);
 
-	return *(int *)ret;  // not sure about handling of return values
+	return 0; // or error code
 }
 
 
@@ -437,19 +437,16 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 
 // Unlocks a given mutex.
 int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
-	// should we make the thread lock the mutex before it can unlock it or do we leave it to the user to use the mutex properly?
-	int exit_code = my_pthread_mutex_lock(mutex);
-	if (exit_code)
-		return exit_code;
-
 	// pause timer, this needs to be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// check that the given thread has the mutex
-	if (mutex->user == running_thread)
+	if (mutex->user == running_thread) {
 		mutex->user = NULL;
-	else // Huston, we have a problem. 
-		exit_code = -1;
+	} else { // Huston, we have a problem.
+ 		setitimer(ITIMER_VIRTUAL, cont, NULL);
+		return -1;
+	}
 
 	// give the lock to the next in line and reactivate them
 	my_pthread_t * next = get_next(mutex->waiting);
@@ -460,7 +457,7 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 
 	// resume the timer and return
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
-	return exit_code;
+	return 0;
 }
 
 
