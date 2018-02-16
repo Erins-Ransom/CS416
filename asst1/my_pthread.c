@@ -136,6 +136,7 @@ void free_ID(int thread_id) {
 	return;
 }
 
+void scheduler_alarm_handler(int signum);
 
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
@@ -336,11 +337,9 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
-	if(makecontext(ucp, function, 1) == -1) {  // thread->argc ? Francisco confirmed argc is always 1
-		return -1;
-	}
+	makecontext(ucp, function, 1);	// thread->argc ? Francisco confirmed argc is always 1
 
-	thread->thread_id = get_ID();  // how are we assigning IDs? In sequence starting at 1
+	thread->thread_id = get_ID();	// how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
