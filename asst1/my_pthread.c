@@ -265,7 +265,6 @@ void scheduler_alarm_handler(int signum) {
 
 			// clean up current thread
 			free(running_thread->uc.uc_stack.ss_sp);	//free stack space
-			free(running_thread);
 
 			break;
 
@@ -292,10 +291,11 @@ void scheduler_alarm_handler(int signum) {
 		current_priority = (current_priority + 1)%NUM_PRIORITY;
 		running_thread = get_next(priority_level[current_priority]);
 	}
-	swapcontext(&(prev_thread->uc), &(running_thread->uc));
 
 	// reset the timer
 	setitimer(ITIMER_VIRTUAL, timer, NULL);
+
+	swapcontext(&(prev_thread->uc), &(running_thread->uc));
 	
 }
 
