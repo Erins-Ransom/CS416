@@ -60,7 +60,7 @@ static my_pthread_t * running_thread;		// reference to the currently running thr
 static short init;				// flag for if the scheduler has been initialized
 static int thread_count;			// Counter to generate new, sequential TIDs
 static tid_node_t * tid_list;			// pointer to front of list of available TIDs
-
+static my_pthread_t * waiting[1000];		// references to waiting threads
 
 // _________________ Utility Functions _____________________
 
@@ -258,9 +258,10 @@ void scheduler_alarm_handler(int signum) {
 			ret = running_thread->ret;
 
 			// if there is a thread waiting on this one, re-activate it
-			if (running_thread->waiting) {
-				running_thread->waiting->status = active;
-				enqueue(running_thread->waiting, priority_level[running_thread->waiting->priority]);
+			if (waiting[running_thread->thread_id]) {
+				waiting[running_thread->thread_id]->status = active;
+				enqueue(waiting[running_thread->thread_id], priority_level[waiting[running_thread->thread_id]->priority]);
+				waiting[running_thread->thread_id] = NULL;
 			}
 
 			// clean up current thread
@@ -382,7 +383,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	
 	// set status of the current thread
 	running_thread->status = wait_thread;
-	thread.waiting = running_thread;  // the thread that called is the one waiting on this thread, no search required
+	waiting[thread.thread_id] = running_thread;  // the thread that called is the one waiting on this thread, no search required
 
 	// set the return value
 	if (value_ptr)
