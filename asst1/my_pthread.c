@@ -3,8 +3,8 @@
 
 // _________________ Macros _______________________________
 
-#define STACK_SIZE 8388608	//default size of call stack
-#define NUM_PRIORITY 5		//number of static priority levels
+#define STACK_SIZE 80000	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
+#define NUM_PRIORITY 1		//number of static priority levels
 
 
 // ____________________ Struct Defs ________________________
