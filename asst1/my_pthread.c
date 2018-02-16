@@ -67,8 +67,7 @@ static my_pthread_t * waiting[1000];		// references to waiting threads
 // Function to initialize a Queue
 Queue * make_queue() {
 	Queue * new = malloc(sizeof(Queue));
-	new->top = NULL;
-	new->bottom = NULL;
+	new->back = NULL;
 	new->size = 0;
 	return new;
 }
@@ -77,15 +76,26 @@ Queue * make_queue() {
 // Function to get the next context waiting in the Queue
 my_pthread_t * get_next(Queue * Q) {
 	my_pthread_t * ret = NULL;
-	Node * temp = Q->top;
-	if (Q->top) {
-		ret = Q->top->thread;
-		Q->top = Q->top->prev;
+	Node * temp = NULL;;
+
+	if (!(Q->size)) {
+		return NULL;
+	} else if (Q->size == 1) {
+		ret = Q->back->thread;
+		free(Q->back);
+		Q->back = NULL;
+	} else {
+		ret = Q->back->next->thread;
+		temp = Q->back->next;
+		if (Q->size == 2) {
+			Q->back->next = Q->back;
+		} else {
+			Q->back->next = Q->back->next->next;
+		}
 		free(temp);
-		Q->size--;
 	}
-	if (Q->size == 0)
-		Q->bottom = NULL;
+
+	Q->size--;
 	return ret;
 
 }
@@ -94,13 +104,13 @@ my_pthread_t * get_next(Queue * Q) {
 void enqueue(my_pthread_t * thread, Queue * Q) {
 	Node * new = malloc(sizeof(Node));
 	new->thread = thread;
-	new->prev = NULL;
-	if (Q->bottom)
-		Q->bottom->prev = new;
-	new->next = Q->bottom;
-	if (!Q->top)
-		Q->top = new;
-	Q->bottom = new;
+	if (Q->size) {
+		new->next = Q->back->next;
+		Q->back->next = new;
+	} else {
+		new->next = new;
+	}
+	Q->back = new;
 	Q->size++;
 }
 
@@ -265,7 +275,7 @@ void scheduler_alarm_handler(int signum) {
 			}
 
 			// clean up current thread
-			free(running_thread->uc.uc_stack.ss_sp);	//free stack space
+			// free(running_thread->uc.uc_stack.ss_sp);	//free stack space
 
 			break;
 

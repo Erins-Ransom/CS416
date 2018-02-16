@@ -31,12 +31,10 @@ typedef struct tid_node {
 typedef struct Node {
         my_pthread_t * thread;
         struct Node * next;
-        struct Node * prev;
 } Node;
 
 typedef struct Queue {
-        Node * top;
-        Node * bottom;
+        Node * back;
         int size;
 } Queue;
 
