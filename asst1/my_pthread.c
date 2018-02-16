@@ -60,7 +60,7 @@ static my_pthread_t * running_thread;		// reference to the currently running thr
 static short init;				// flag for if the scheduler has been initialized
 static int thread_count;			// Counter to generate new, sequential TIDs
 static tid_node_t * tid_list;			// pointer to front of list of available TIDs
-static my_pthread_t * waiting[1000];		// references to waiting threads
+static my_pthread_t * table[1000][2];		// references to all threads, table[thread_id][0], and any thread waiting on it, table[thread_id][1]
 
 // _________________ Utility Functions _____________________
 
@@ -268,10 +268,10 @@ void scheduler_alarm_handler(int signum) {
 			ret = running_thread->ret;
 
 			// if there is a thread waiting on this one, re-activate it
-			if (waiting[running_thread->thread_id]) {
+			if (table[running_thread->thread_id][1]) {
 				waiting[running_thread->thread_id]->status = active;
-				enqueue(waiting[running_thread->thread_id], priority_level[waiting[running_thread->thread_id]->priority]);
-				waiting[running_thread->thread_id] = NULL;
+				enqueue(table[running_thread->thread_id][1], priority_level[table[running_thread->thread_id][1]->priority]);
+				talbe[running_thread->thread_id][1] = NULL;
 			}
 
 			// clean up current thread
@@ -354,7 +354,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
-	thread->waiting = NULL;
+	table[thread->thread_id][0] = thread;
 	enqueue(thread, priority_level[0]);
 	thread->status = active;
 
@@ -390,10 +390,13 @@ void pthread_exit(void *value_ptr) {
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	// pause timer, this should be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
+	if () {
+		
+	}
 	
 	// set status of the current thread
 	running_thread->status = wait_thread;
-	waiting[thread.thread_id] = running_thread;  // the thread that called is the one waiting on this thread, no search required
+	table[thread.thread_id][1] = running_thread;  // the thread that called is the one waiting on this thread, no search required
 
 	// set the return value
 	if (value_ptr)

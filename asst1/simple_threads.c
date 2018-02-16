@@ -11,8 +11,15 @@ void * foo(void* arg)
 
 int main(int argc, char** argv)
 {
-	my_pthread_t foo_thread;
-	my_pthread_create(&foo_thread, NULL, &foo, NULL);
-	my_pthread_join(foo_thread, NULL);	
+	int x = 5, i = 0;
+	my_pthread_t thread[x];
+	for (i = 0; i < x; i++) {
+		my_pthread_create(&thread[i], NULL, &foo, NULL);
+	}
+
+	for (i = 0; i < x; i++) {
+		my_pthread_join(thread[i], NULL);	
+        }
+
 	return 0;
 }
