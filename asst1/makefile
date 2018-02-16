@@ -12,7 +12,7 @@ simple_threads.o: simple_threads.c
 test.o: test.c
 	gcc -g -c test.c
 
-my_pthread.o:
+my_pthread.o: my_thread.c
 	gcc -g -c my_pthread.c
 
 clean:
