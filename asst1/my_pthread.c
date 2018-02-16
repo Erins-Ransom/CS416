@@ -5,54 +5,17 @@
 
 #define STACK_SIZE 80000	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
 #define NUM_PRIORITY 1		//number of static priority levels
+#define THREAD_LIM 1000		// maximum number of threads allowed
 
-
-// ____________________ Struct Defs ________________________
-//             * MOVED TO THE HEADER FILE *
-/* 
-enum thread_status {running, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
-
-typedef struct tid_node {
-	int tid;
-	struct tid_node* next;
-} tid_node_t;
-
-typedef struct Node {
-	my_pthread_t * thread;
-	struct Node * next;
-	struct Node * prev;
-} Node;
-
-typedef struct Queue {
-	Node * top;
-	Node * bottom;
-	int size;
-} Queue;
-
-typedef struct my_pthread {
-	int thread_id;			//integer identifier of thread
-	int priority;			// current priority level of this thread
-	int intervals_run;		// the number of concecutive intervals this thread has run
-	enum thread_status status;	// the threads current status
-	void* ret;			//return value of the thread
-	struct my_pthread * waiting;	// reference to a thread waiting on this thread to exit, otherwise NULL
-	ucontext_t uc;			//execution context of given thread
-} my_pthread_t;
-
-typedef struct my_pthread_mutex {
-	Queue * waiting;		// queue of threads waiting on this mutex
-	my_pthread_t * user;		// reference to the thread that currently has the mutex, NULL if not claimed
-} my_pthread_mutex_t;
-*/
 
 
 // ___________________ Globals ______________________________
 
-static ucontext_t main_context;			//execution context for main 
-static Queue* priority_level[NUM_PRIORITY]; 	//array of pointers to queues associated with static priority levels
+static ucontext_t main_context;			// execution context for main 
+static Queue * priority_level[NUM_PRIORITY]; 	// array of pointers to queues associated with static priority levels
+static Queue * death_row;			// queue for threads waiting to die
 static int current_priority;			// current piority level that is being run
 static int run_at_priority;			// threads run at the current priority
-static void* ret; 				//used to store return value from terminated thread
 static struct itimerval * timer;		// timer to periodically activate the scheduler
 static struct itimerval * pause;		// a zero itimerval used to pause the timer
 static struct itimerval * cont;			// a place to store the current time
@@ -60,7 +23,10 @@ static my_pthread_t * running_thread;		// reference to the currently running thr
 static short init;				// flag for if the scheduler has been initialized
 static int thread_count;			// Counter to generate new, sequential TIDs
 static tid_node_t * tid_list;			// pointer to front of list of available TIDs
-static my_pthread_t * table[1000][2];		// references to all threads, table[thread_id][0], and any thread waiting on it, table[thread_id][1]
+static my_pthread_t * thread_table[THREAD_LIM];	// references to all current threads
+static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
+static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
+
 
 // _________________ Utility Functions _____________________
 
@@ -121,7 +87,7 @@ int get_ID() {
 	int tid;
 	tid_node_t * ptr;	
 
-	if(tid_list == NULL) {			//if the list is empty, issue a new ID
+	if (tid_list == NULL) {			//if the list is empty, issue a new ID
 		tid = thread_count;
 		thread_count++;
 	} else {				//otherwise, take a recycled ID from the list
@@ -130,6 +96,9 @@ int get_ID() {
 		tid = ptr->tid;
 		free(ptr);	
 	}
+
+	if (tid >= THREAD_LIM)			// exceeded max 
+		tid = -1;
 
 	return tid;
 }
@@ -160,6 +129,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	for(i = 0; i < NUM_PRIORITY; i++) {
 		priority_level[i] = make_queue();
 	}
+	death_row = make_queue();
 
 	/*****************************************************
  	 * The below block of code creates a thread for main *
@@ -179,11 +149,12 @@ int scheduler_init() {  		// should we return something? int to signal success/e
                 			return -1;
         			}
 			*/
+
 	running_thread->uc = main_context;			//sets the context of the main_context as the running thread
 	running_thread->status = active;			//sets the status of the main context to active
 	running_thread->priority = 0;				//sets the priority level of the main context to 0 (the highest priority)
 	running_thread->intervals_run = 0;			//initialized the number of time slices main_context has run to 0
-	running_thread->thread_id = 0;				//sets the thread ID for main to 0
+	running_thread->id = 0;					//sets the thread ID for main to 0
 	
 	/****************************************************
  	* This ends to block of code where main is set as   *
@@ -212,6 +183,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	setitimer(ITIMER_VIRTUAL, timer, NULL);			//start the timer
 
 	// activate the scheduler
+	init = 1;
 	signal(SIGVTALRM, scheduler_alarm_handler);
 
 	return 0;
@@ -264,27 +236,16 @@ void scheduler_alarm_handler(int signum) {
 			break;
 
 		case thread_exit :
-			// take care of return values
-			ret = running_thread->ret;
-
 			// if there is a thread waiting on this one, re-activate it
-			if (table[running_thread->thread_id][1]) {
-				waiting[running_thread->thread_id]->status = active;
-				enqueue(table[running_thread->thread_id][1], priority_level[table[running_thread->thread_id][1]->priority]);
-				talbe[running_thread->thread_id][1] = NULL;
+			if (waiting[running_thread->id]) {
+				waiting[running_thread->id]->status = active;
+				enqueue(waiting[running_thread->id], priority_level[waiting[running_thread->id]->priority]);
 			}
-
-			// clean up current thread
-			// free(running_thread->uc.uc_stack.ss_sp);	//free stack space
 
 			break;
 
-		case embryo :
-			// what do you do here?????
-			// ANSWER: This state is not needed, thread creation is atomic so the scheduler will not interupt it
-
 		default :
-
+			//ERROR
 			break;
 	}
 
@@ -326,8 +287,6 @@ void user1_signal_handler(int signum) {
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
 int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
 
-	thread->status = embryo;	//thread in process of being created
-
 	// check and initialize the scheduler if needed
 	if (!init) {
 		scheduler_init();
@@ -348,13 +307,15 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
-	makecontext(ucp, function, 1);	// thread->argc ? Francisco confirmed argc is always 1
+	makecontext(ucp, function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
 
-	thread->thread_id = get_ID();	// how are we assigning IDs? In sequence starting at 1
+	thread->id = get_ID();		// how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
-	table[thread->thread_id][0] = thread;
+	thread_table[thread->id] = thread;
+	waiting[thread->id] = NULL;
+	done[thread->id] = 0;
 	enqueue(thread, priority_level[0]);
 	thread->status = active;
 
@@ -375,36 +336,47 @@ void my_pthread_yield() {
 // Explicit call to the my_pthread_t library to end the pthread that called it. If the value_ptr isn't NULL,
 // any return value from the thread will be saved.
 void pthread_exit(void *value_ptr) {
+	// pause the timer
+	setitimer(ITIMER_VIRTUAL, pause, cont);
 
-	if(value_ptr != NULL) {
-		ret = value_ptr;	//saves value to global variable
-	}
+	// set the address of the return value
+	running_thread->ret = value_ptr;
 
-	// set thread status to and signal the scheduler to take care of it
+	// set thread status to exit and signal the scheduler to take care of it
 	running_thread->status = thread_exit;
+	done[running_thread->id] = 1;
 	raise(SIGVTALRM);
 }
 
 
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
-	// pause timer, this should be atomic
-	setitimer(ITIMER_VIRTUAL, pause, cont);
-	if () {
-		
+
+	// if the thread to be joined is not finished, wait on it
+	if (!done[thread.id]) {
+		//pause timer
+		setitimer(ITIMER_VIRTUAL, pause, cont);
+		running_thread->status = wait_thread;
+		waiting[thread.id] = running_thread; 
+		setitimer(ITIMER_VIRTUAL, cont, NULL);
+		raise(SIGVTALRM);
 	}
 	
-	// set status of the current thread
-	running_thread->status = wait_thread;
-	table[thread.thread_id][1] = running_thread;  // the thread that called is the one waiting on this thread, no search required
+	// pause timer
+	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// set the return value
 	if (value_ptr)
-		*value_ptr = ret;
+		*value_ptr = thread_table[thread.id]->ret;
 
-	// resume timer and signal so another thread can be scheduled
+	// clean up the finished thread
+	waiting[thread.id] = NULL;
+	free(thread_table[thread.id]->uc.uc_stack.ss_sp);
+	thread_table[thread.id] = NULL;
+	free_ID(thread.id);
+
+	// resume
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
-	raise(SIGVTALRM);
 
 	return 0; // or error code
 }

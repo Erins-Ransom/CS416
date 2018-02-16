@@ -11,15 +11,14 @@
 
 // ____________________ Struct Defs ________________________
 
-enum thread_status {active, yield, wait_thread, wait_mutex, unlock, thread_exit, embryo};
+enum thread_status {active, yield, wait_thread, wait_mutex, unlock, thread_exit};
 
 typedef struct my_pthread {
-        int thread_id;                  //integer identifier of thread
+        int id;                  	//integer identifier of thread
         int priority;                   // current priority level of this thread
         int intervals_run;              // the number of concecutive intervals this thread has run
         enum thread_status status;      // the threads current status
         void* ret;                      //return value of the thread
-        struct my_pthread * waiting;    // reference to a thread waiting on this thread to exit, otherwise NULL
         ucontext_t uc;                  //execution context of given thread
 } my_pthread_t;
 
