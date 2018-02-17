@@ -401,6 +401,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	if (mutex->user == running_thread) { 
 		// already have the lock, resume the clock and return
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
+		// ERROR ?
 		return 0;
 	} else if (mutex->user) {
 		// the mutex is claimed, so we need to wait for it
@@ -426,18 +427,17 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// check that the given thread has the mutex
-	if (mutex->user == running_thread) {
-		mutex->user = NULL;
-	} else { // Huston, we have a problem.
+	if (mutex->user != running_thread) {
+		// ERROR
  		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		return -1;
 	}
 
 	// give the lock to the next in line and reactivate them
-	my_pthread_t * next = get_next(mutex->waiting);
-	if (next) {
-		next->status = active;
-		enqueue(next, priority_level[next->priority]);
+	mutex->user = get_next(mutex->waiting);
+	if (mutex->user) {
+		mutex->user->status = active;
+		enqueue(mutex->user, priority_level[mutex->user->priority]);
 	}
 
 	// resume the timer and return
