@@ -3,8 +3,8 @@
 
 // _________________ Macros _______________________________
 
-#define STACK_SIZE 80000	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 1		//number of static priority levels
+#define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
+#define NUM_PRIORITY 5		//number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
 
 
@@ -143,13 +143,6 @@ int scheduler_init() {  		// should we return something? int to signal success/e
                 return -1;
         }
 
-			/*	Don't think we need this, I beleive it will get set when the scheduler calls swapcontext()
-
-			        if(makecontext(&main_context, main, 2) == -1) {
-                			return -1;
-        			}
-			*/
-
 	running_thread->uc = main_context;			//sets the context of the main_context as the running thread
 	running_thread->status = active;			//sets the status of the main context to active
 	running_thread->priority = 0;				//sets the priority level of the main context to 0 (the highest priority)
@@ -224,13 +217,6 @@ void scheduler_alarm_handler(int signum) {
 
 			break;
 
-		case wait_thread :
-			// move running thread to the waiting queue 
-			// enqueu(running_thread, waiting);
-			// NOTE: waiting queue is obsolete, don't need to do anything here
-
-			break;
-
 		case wait_mutex :
 			// don't really need to do anything here?
 			break;
@@ -271,13 +257,6 @@ void scheduler_alarm_handler(int signum) {
 	
 }
 
-//signal handler to activate the scheduler to store the return value from a terminated thread
-void user1_signal_handler(int signum) {
-	// I think this will be covered by the above signal handler, but I could be mistaken?
-}
-
-
-
 // __________________ API ____________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
@@ -297,8 +276,6 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 
 	ucontext_t* ucp = &(thread->uc);
 
-	//ucontext_t* ucp = &(thread);   //Is this the current way to set the a ucontext for the incoming thread? This is incorrect; type mismatch
-
 	if(getcontext(ucp) == -1) {
 		return -1;
 	}
@@ -307,7 +284,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
-	makecontext(ucp, function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
+	makecontext(ucp, (void (*)(void))function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
 
 	thread->id = get_ID();		// how are we assigning IDs? In sequence starting at 1
 	thread->priority = 0;
