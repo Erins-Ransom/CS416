@@ -1,6 +1,10 @@
+// name: Eric Knorr, Daniel Parks, Eric Fiore
+// username of iLab: erk58, 
+// iLab Server:
+#ifndef MY_PTHREAD_T_H
+#define MY_PTHREAD_T_H
 
-#ifndef MY_PTHREAD_T
-#define MY_PTHREAD_T
+#define _GNU_SOURCE
 
 #include <stdlib.h>
 #include <ucontext.h>
@@ -11,7 +15,7 @@
 
 // ____________________ Struct Defs ________________________
 
-enum thread_status {active, yield, wait_thread, wait_mutex, unlock, thread_exit};
+enum thread_status {active, yield, wait_thread, wait_mutex, thread_exit};
 
 typedef struct my_pthread {
         int id;                  	//integer identifier of thread

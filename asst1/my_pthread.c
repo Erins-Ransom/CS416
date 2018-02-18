@@ -4,7 +4,7 @@
 // _________________ Macros _______________________________
 
 #define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 1		//number of static priority levels
+#define NUM_PRIORITY 5		//number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
 
 
@@ -124,7 +124,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	tid_list = NULL;		//list starts empty
 		
 	//initialize queues representing priority levels
-	//NUM_PRIORITY = 5 so this will make 6 (0-5) new queues
+	//NUM_PRIORITY = 5 so this will make 5 (0-4) new queues
 	int i;
 	for(i = 0; i < NUM_PRIORITY; i++) {
 		priority_level[i] = make_queue();
@@ -218,7 +218,7 @@ void scheduler_alarm_handler(int signum) {
 			break;
 
 		case wait_mutex :
-			// don't really need to do anything here?
+			// don't really need to do anything here
 			break;
 
 		case thread_exit :
