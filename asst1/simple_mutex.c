@@ -11,8 +11,9 @@ void * foo(void* arg)
 
 	FILE* fd = fopen("shared.txt", "a+");
 	int i;
-	for(i = 0; i < 10000; i++) {
+	for(i = 0; i < 1000000; i++) {
 		fprintf(fd, "AAA ");
+		fflush(fd);
 	}
 
 	my_pthread_mutex_unlock(&MUTEX);
@@ -26,11 +27,12 @@ void * bar(void* arg)
         
 	FILE* fd = fopen("shared.txt", "a+");
        	int i;
-        for(i = 0; i < 10000; i++) {
+        for(i = 0; i < 1000000; i++) {
                 fprintf(fd, "ZZZ ");
+		fflush(fd);
         }
  
-        my_pthread_mutex_unlock(&MUTEX);
+	my_pthread_mutex_unlock(&MUTEX);
         
         pthread_exit(NULL);
 }

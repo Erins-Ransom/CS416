@@ -4,7 +4,7 @@
 // _________________ Macros _______________________________
 
 #define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 5		//number of static priority levels
+#define NUM_PRIORITY 1		//number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
 
 
@@ -44,7 +44,7 @@ my_pthread_t * get_next(Queue * Q) {
 	my_pthread_t * ret = NULL;
 	Node * temp = NULL;;
 
-	if (!(Q->size)) {
+	if (Q->size == 0) {
 		return NULL;
 	} else if (Q->size == 1) {
 		ret = Q->back->thread;
@@ -388,10 +388,11 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 		// resume timer and signal so another thread can be scheduled
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		raise(SIGVTALRM);
-		return 0;
-	} else {
-		mutex->user = running_thread;
 	}
+		
+	// claim the mutex
+	mutex->user = running_thread;
+
 	// resume timer
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	return 0;
