@@ -1,3 +1,6 @@
+// name: Eric Knorr, Daniel Parks, Eric Fiore
+// netID: erk58, dap291, ejf96
+
 #include "my_pthread_t.h"
 
 

@@ -1,6 +1,6 @@
 // name: Eric Knorr, Daniel Parks, Eric Fiore
-// username of iLab: erk58, 
-// iLab Server:
+// netID: erk58, dap291, ejf96
+
 #ifndef MY_PTHREAD_T_H
 #define MY_PTHREAD_T_H
 
@@ -11,6 +11,8 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <errno.h>
+
+#define USE_MY_PTHREAD 1;
 
 #ifdef USE_MY_PTHREAD
 #define pthread_t my_pthread_t
