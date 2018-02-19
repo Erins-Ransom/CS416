@@ -47,10 +47,6 @@ typedef struct my_pthread_mutex {
         my_pthread_t * user;            // reference to the thread that currently has the mutex, NULL if not claimed
 } my_pthread_mutex_t;
 
-
-
-
-
 // ______________________ API _________________________
 
 // Pthread Note: Your internal implementation of pthreads should have a running and waiting queue.
