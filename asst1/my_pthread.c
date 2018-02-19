@@ -33,6 +33,9 @@ static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finis
 // Function to initialize a Queue
 Queue * make_queue() {
 	Queue * new = malloc(sizeof(Queue));
+	if(new == NULL) {
+		return 0;
+	}
 	new->back = NULL;
 	new->size = 0;
 	return new;
@@ -130,6 +133,11 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 		priority_level[i] = make_queue();
 	}
 	death_row = make_queue();
+
+	// initialize thread table to null
+	for(i = 0; i < THREAD_LIM; i++) {
+		thread_table[i] = NULL;
+	}
 
 	/*****************************************************
  	 * The below block of code creates a thread for main *
@@ -266,6 +274,10 @@ void scheduler_alarm_handler(int signum) {
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
 int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
 
+	if(attr < 0) { //attr is ignored, but if it is explicity a negative value aka someone trying to break our code, return error
+		return EINVAL;
+	}
+
 	// check and initialize the scheduler if needed
 	if (!init) {
 		scheduler_init();
@@ -281,12 +293,18 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
+	
+	if(ucp->uc_stack.ss_sp == NULL) { //malloc() failed to get get necessary resources, set errno and return
+		return EAGAIN;
+	}
+
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
 	makecontext(ucp, (void (*)(void))function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
 
 	thread->id = get_ID();		// how are we assigning IDs? In sequence starting at 1
+	thread->wait_id = -1;		// not waiting on a thread
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
@@ -329,11 +347,34 @@ void pthread_exit(void *value_ptr) {
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 
+	// two threads tried to join with each other
+	if(running_thread->id == thread.id) {
+		return EDEADLK;
+	}
+
+	// thread tries to wait on a thread that is already waiting on calling thread
+	if(thread.wait_id == running_thread->id) {
+		return EDEADLK;
+	}
+
+	//Another thread is already waiting to join with this thread.
+	int i;
+	for(i = 0; i < THREAD_LIM; i++) {
+		if(waiting[i] && waiting[i]->wait_id == running_thread->id) {
+			return EINVAL;
+		}
+	}
+
+	if(thread_table[thread.id] == NULL) {
+		return ESRCH;
+	}
+
 	// if the thread to be joined is not finished, wait on it
 	if (!done[thread.id]) {
 		//pause timer
 		setitimer(ITIMER_VIRTUAL, pause, cont);
 		running_thread->status = wait_thread;
+		running_thread->wait_id = thread.id;
 		waiting[thread.id] = running_thread; 
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		raise(SIGVTALRM);
@@ -364,6 +405,10 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 // Initializes a my_pthread_mutex_t created by the calling thread. Attributes are ignored.
 int my_pthread_mutex_init(my_pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexattr) {
 	mutex->waiting = make_queue();
+	if(mutex->waiting == NULL) {
+		return ENOMEM;
+	}
+
 	mutex->user = NULL;
 	return 0;
 }
