@@ -6,7 +6,7 @@
 #define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
 #define NUM_PRIORITY 5		//number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
-
+#define MUTEX_LIM 1000		// maximum number of mutexes allowed
 
 
 // ___________________ Globals ______________________________
@@ -25,6 +25,7 @@ static int thread_count;			// Counter to generate new, sequential TIDs
 static tid_node_t * tid_list;			// pointer to front of list of available TIDs
 static my_pthread_t * thread_table[THREAD_LIM];	// references to all current threads
 static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
+static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
 static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
 
 
@@ -33,6 +34,9 @@ static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finis
 // Function to initialize a Queue
 Queue * make_queue() {
 	Queue * new = malloc(sizeof(Queue));
+	if(new == NULL) {
+		return 0;
+	}
 	new->back = NULL;
 	new->size = 0;
 	return new;
@@ -121,8 +125,8 @@ void scheduler_alarm_handler(int signum);
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
 	thread_count = 1;		//generates the first TID which will be 1
-	tid_list = NULL;		//list starts empty
-		
+	tid_list = NULL;		//list starts empty	
+	
 	//initialize queues representing priority levels
 	//NUM_PRIORITY = 5 so this will make 5 (0-4) new queues
 	int i;
@@ -130,6 +134,15 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 		priority_level[i] = make_queue();
 	}
 	death_row = make_queue();
+
+	// initialize thread table to null
+	for(i = 0; i < THREAD_LIM; i++) {
+		thread_table[i] = NULL;
+	}
+
+	for(i = 0; i < MUTEX_LIM; i++) {
+		mutex_list[i] = NULL;
+	}
 
 	/*****************************************************
  	 * The below block of code creates a thread for main *
@@ -266,6 +279,10 @@ void scheduler_alarm_handler(int signum) {
 // Creates a pthread that executes function. Attributes are ignored, arg is not.
 int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) {	
 
+	if(attr < 0) { //attr is ignored, but if it is explicity a negative value aka someone trying to break our code, return error
+		return EINVAL;
+	}
+
 	// check and initialize the scheduler if needed
 	if (!init) {
 		scheduler_init();
@@ -281,12 +298,18 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
+	
+	if(ucp->uc_stack.ss_sp == NULL) { //malloc() failed to get get necessary resources, set errno and return
+		return EAGAIN;
+	}
+
 	ucp->uc_stack.ss_size = STACK_SIZE;
 	ucp->uc_link = &main_context;
 
 	makecontext(ucp, (void (*)(void))function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
 
 	thread->id = get_ID();		// how are we assigning IDs? In sequence starting at 1
+	thread->wait_id = -1;		// not waiting on a thread
 	thread->priority = 0;
 	thread->intervals_run = 0;
 	thread->ret = NULL;
@@ -329,11 +352,34 @@ void pthread_exit(void *value_ptr) {
 // Call to the my_pthread_t library ensuring that the calling thread will not continue execution until the one it references exits. If value_ptr is not null, the return value of the exiting thread will be passed back.
 int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 
+	// two threads tried to join with each other
+	if(running_thread->id == thread.id) {
+		return EDEADLK;
+	}
+
+	// thread tries to wait on a thread that is already waiting on calling thread
+	if(thread.wait_id == running_thread->id) {
+		return EDEADLK;
+	}
+
+	//Another thread is already waiting to join with this thread.
+	int i;
+	for(i = 0; i < THREAD_LIM; i++) {
+		if(waiting[i] && waiting[i]->wait_id == running_thread->id) {
+			return EINVAL;
+		}
+	}
+
+	if(thread_table[thread.id] == NULL) {
+		return ESRCH;
+	}
+
 	// if the thread to be joined is not finished, wait on it
 	if (!done[thread.id]) {
 		//pause timer
 		setitimer(ITIMER_VIRTUAL, pause, cont);
 		running_thread->status = wait_thread;
+		running_thread->wait_id = thread.id;
 		waiting[thread.id] = running_thread; 
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		raise(SIGVTALRM);
@@ -364,7 +410,35 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 // Initializes a my_pthread_mutex_t created by the calling thread. Attributes are ignored.
 int my_pthread_mutex_init(my_pthread_mutex_t *mutex, const pthread_mutexattr_t *mutexattr) {
 	mutex->waiting = make_queue();
+	
+	// no memory to make the queue
+	if(mutex->waiting == NULL) {
+		return ENOMEM;
+	}
+
+	// attempt to reinitialize a mutex already in use
+	int i;
+	for(i = 0; i < MUTEX_LIM; i++) {
+		if(mutex_list[i] == mutex) { 
+			return EBUSY;
+		}
+	}
+
+	// invalid entry for mutexattr
+	if(mutexattr < 0) {
+		return EINVAL;
+	}
+
 	mutex->user = NULL;
+
+	// add mutex to list of active mutexes	
+	for(i = 0; i < MUTEX_LIM; i++) {
+		if(mutex_list[i] == NULL) {
+			mutex_list[i] = mutex;
+			break;
+		}
+	}
+	
 	return 0;
 }
 
@@ -374,12 +448,17 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	// pause timer, this opperation needs to be atomic
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
+	// invalid value for mutex
+	if(mutex <= 0) {
+		setitimer(ITIMER_VIRTUAL, cont, NULL);
+		return EINVAL;
+	}
+
 	// check whether the mutex is available and assign it or add the thread to the mutex queue
 	if (mutex->user == running_thread) { 
 		// already have the lock, resume the clock and return
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
-		// ERROR ?
-		return 0;
+		return EDEADLK;
 	} else if (mutex->user) {
 		// the mutex is claimed, so we need to wait for it
 		enqueue(running_thread, mutex->waiting);
@@ -405,10 +484,9 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	setitimer(ITIMER_VIRTUAL, pause, cont);
 
 	// check that the given thread has the mutex
-	if (mutex->user != running_thread) {
-		// ERROR
+	if (mutex->user != running_thread) {	
  		setitimer(ITIMER_VIRTUAL, cont, NULL);
-		return -1;
+		return EPERM;
 	}
 
 	// give the lock to the next in line and reactivate them
@@ -433,6 +511,24 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 
 	// pause timer, does this need to be atomic?
 	setitimer(ITIMER_VIRTUAL, pause, cont);
+
+	// remove mutex from active list, return error if mutex is still locked
+	int i;
+	for(i = 0; i < MUTEX_LIM; i++) {
+		if(mutex_list[i] == mutex ) {
+	        	if(mutex->user == NULL) {
+				mutex_list[i] == NULL;
+				break;
+			} else {
+				return EBUSY;
+			}
+		}
+	}
+
+	// mutex not found in list
+	if(i == MUTEX_LIM) {
+		return EINVAL;
+	}
 
 	// clean up the mutex and unlock it
 	my_pthread_t * temp;

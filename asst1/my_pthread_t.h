@@ -10,7 +10,7 @@
 #include <ucontext.h>
 #include <signal.h>
 #include <sys/time.h>
-
+#include <errno.h>
 
 
 // ____________________ Struct Defs ________________________
@@ -21,8 +21,9 @@ typedef struct my_pthread {
         int id;                  	//integer identifier of thread
         int priority;                   // current priority level of this thread
         int intervals_run;              // the number of concecutive intervals this thread has run
-        enum thread_status status;      // the threads current status
-        void* ret;                      //return value of the thread
+        int wait_id;			// TID of thread being waited on
+	enum thread_status status;      // the threads current status
+	void* ret;                      //return value of the thread
         ucontext_t uc;                  //execution context of given thread
 } my_pthread_t;
 
@@ -45,10 +46,6 @@ typedef struct my_pthread_mutex {
         Queue * waiting;                // queue of threads waiting on this mutex
         my_pthread_t * user;            // reference to the thread that currently has the mutex, NULL if not claimed
 } my_pthread_mutex_t;
-
-
-
-
 
 // ______________________ API _________________________
 
