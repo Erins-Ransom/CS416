@@ -4,7 +4,7 @@
 // _________________ Macros _______________________________
 
 #define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 1		//number of static priority levels
+#define NUM_PRIORITY 5		//number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
 
 
