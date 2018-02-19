@@ -294,12 +294,14 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucontext_t* ucp = &(thread->uc);
 
 	if(getcontext(ucp) == -1) {
+		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		return -1;
 	}
 
 	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
 	
 	if(ucp->uc_stack.ss_sp == NULL) { //malloc() failed to get get necessary resources, set errno and return
+		setitimer(ITIMER_VIRTUAL, cont, NULL);
 		return EAGAIN;
 	}
 
