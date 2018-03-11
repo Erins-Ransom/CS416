@@ -12,7 +12,7 @@
 static char mem[TOTSIZE];
 mem_block *meta_ptr = (void*)mem;	//meta_ptr will point to the beginning of the allocatable memory where the metadata is stores
 
-void * mymalloc(size_t size, char * file, int line) {
+void * mymalloc(size_t size, char * file, int line, int request) {
 
   //static short firstmalloc = 1;
 
@@ -24,7 +24,7 @@ void * mymalloc(size_t size, char * file, int line) {
     firstmalloc = 0;
   }
   */
-	mem_block *curr_block = NULL, *next_block = NULL;
+	mem_block *curr_block = NULL;
 	void* return_value = NULL;
 	
 	/********************************
@@ -37,7 +37,7 @@ void * mymalloc(size_t size, char * file, int line) {
 		meta_ptr->size = TOTSIZE - (TOTSIZE/100);	//set size of block to 99% of total block size
 		meta_ptr->is_free = 1;				//set block to available
 		meta_ptr->next = NULL;				//no next block yet so set to NULL
-		meta_ptr->alloc_start = (void*)(mem + (TOTSIZE/100) + 1);	//set beginning of first byte after end of metadata area
+		meta_ptr->alloc_start = (void*)(mem + (TOTSIZE/100));	//set beginning of first byte after end of metadata area
 	}
 
   // check if size requested is larger than total mem - metadata 
@@ -101,15 +101,21 @@ void * mymalloc(size_t size, char * file, int line) {
  	* **************************************/
 	else if(curr_block->size > size)	//if the size of the current block of memory is larger then requested
 	{
-		next_block = (void*)(curr_block + 1);				//set up a new metadata area one block farther
-		next_block->is_free = 1;					//set the block of memory to free
-		next_block->next = curr_block->next;				//set the new metadata area to point to the next metadata area
-		next_block->size = curr_block->size - size;			//set the new block of memory to the current block of memory minus the requested size
-		next_block->alloc_start = (void*)(curr_block->alloc_start + size + 1);//set the new metadata block to point to the new allocatable memory
-		curr_block->size = size;					//set the current block to the size of the requested block		
-		curr_block->is_free = 0;					//set the free flag to not free
-		curr_block->next = next_block;					//set the current metadata to point to the next block
-		return_value = curr_block->alloc_start;
+		mem_block *best_fit = curr_block;			//keep saving the best fit found so far
+		int best_fit_size = curr_block->size;			//save the best fitting size found so far
+		for(curr_block; curr_block->next != NULL; ++curr_block)
+		{
+			if(curr_block->is_free && curr_block->size >= size && curr_block->size < best_fit_size)	//if the current block size is greator or equal and current block size is smaller then best fit so far and the current block is free
+			{
+				best_fit = curr_block;						//current block becomes new best fit
+				if(best_fit->size == size)					//if the best fit is equal to the size requested the best fit is found
+					break;							//break out
+				best_fit_size = curr_block->size;				//best fit size is the current size
+			}
+		}
+		if(best_fit_size != size)							//block only need to be split if there is a delta between size of block and requested size
+			best_fit = mem_split(best_fit, size);
+		return_value = best_fit->alloc_start;
 	}
 
 	else
@@ -146,8 +152,63 @@ void * mymalloc(size_t size, char * file, int line) {
 
 }
 
+/****************************************
+ * this function will split a block of	*
+ * memory that is too large into	*
+ * smaller pieces. a check is needed to	*
+ * see if the next meta data slot is 	*
+ * occupied. if it is occoupied shift	*
+ * all block down one slot and then	*
+ * create new block in newly open spot	*
+ * if next slot is unocupied create	*
+ * new metadata in new open spot	*
+ * *************************************/
+mem_block* mem_split(mem_block *best_fit, size_t size)
+{
+	mem_block *next_block = NULL;
 
-void myfree(void * index, char * file, int line) {
+	if(best_fit->next == NULL || !(best_fit->next->size))					//if the next metadata slot is not initialized or initialized but empty
+	{
+		next_block = (best_fit + 1);			//set up a new metadata area one block farther
+		next_block->is_free = 1;			//set the new block of memory to available
+		next_block->next = best_fit->next;		//set the mew metadata area to point to the next meta data area
+		next_block->size = best_fit->size - size;	//set the new block size
+		next_block->alloc_start = (void*)(best_fit->alloc_start + size);//set the new metadata block to point to the new allocatable memory
+		best_fit->size = size;				//set the current block to the size of the requested block
+		best_fit->is_free = 0;				//set the free flag to not free
+		best_fit->next = next_block;			//set the current metadata to point to the next block
+	}
+	else							//if the next metadata slot is already occupied
+	{
+		mem_block* saved_block = best_fit;		//to save the current position so we can go back later
+		while(best_fit->next != NULL)			//go to end of metadata list
+			++best_fit;
+		while(best_fit != saved_block)
+		{
+			next_block = (void*)(best_fit + 1);				//the new metablock will be used to transfer the previous postion into new block
+			next_block->is_free = best_fit->is_free;			//copy over next if block is free
+			if(best_fit->next == NULL)					//if the current block next points to NULL copy over NULL
+				next_block->next = best_fit->next;
+			else								//if the current block next point to next block copy over two positions away
+				next_block->next = best_fit->next->next;		
+			next_block->size = best_fit->size;				//copy over size info
+			next_block->alloc_start = (void*)(best_fit->alloc_start);	//copy over allocatable mem location
+			best_fit->next = next_block;
+			--best_fit;
+		}
+		next_block = (void*)(best_fit + 1);		//set up a new metadata are one block farther
+		next_block->is_free = 1;			//set the new block of memory to available
+		next_block->next = best_fit->next->next;	//copy over next block info
+		next_block->size = best_fit->size - size;	//set the new block size
+		next_block->alloc_start = (void*)(best_fit->alloc_start + size);//set the new metadata block to poitn to the new allocatable memory
+		best_fit->is_free = 0;			//set the free flag to not free
+		best_fit->next = next_block;			//set the current meatadta to point to the next block
+	}
+	return best_fit;
+}
+
+
+void myfree(void * index, char * file, int line, int request) {
 
   //check if the given index is a valid pointer
   if (index < (void*)mem || (void*)(mem + TOTSIZE) <= index) {
@@ -199,7 +260,7 @@ void myfree(void * index, char * file, int line) {
 			continue;					//continue with loop
 		}
 		curr_block = curr_block->next;				//if the current and next blocks were not free keep searching
-	} 
+	} 	
 
 	return;
   /*
