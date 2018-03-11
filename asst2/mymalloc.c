@@ -10,7 +10,7 @@
 // Here is our block of memory which is 8MB total size
 // The first 1% of the block is saved for metadata
 static char mem[TOTSIZE];
-mem_block *meta_ptr = (void*)mem;
+mem_block *meta_ptr = (void*)mem;	//meta_ptr will point to the beginning of the allocatable memory where the metadata is stores
 
 void * mymalloc(size_t size, char * file, int line) {
 
@@ -27,6 +27,11 @@ void * mymalloc(size_t size, char * file, int line) {
 	mem_block *curr_block = NULL, *next_block = NULL;
 	void* return_value = NULL;
 	
+	/********************************
+ 	* if the is is the first time	*
+ 	* malloc is called set up the	*
+ 	* first meta data block		*
+ 	* ******************************/
 	if(!(meta_ptr->size))
 	{
 		meta_ptr->size = TOTSIZE - (TOTSIZE/100);	//set size of block to 99% of total block size
@@ -35,7 +40,7 @@ void * mymalloc(size_t size, char * file, int line) {
 		meta_ptr->alloc_start = (void*)(mem + (TOTSIZE/100) + 1);	//set beginning of first byte after end of metadata area
 	}
 
-  // check if size is larger than total mem - metadata 
+  // check if size requested is larger than total mem - metadata 
   if (size > TOTSIZE - (TOTSIZE - (TOTSIZE/100))) {
     fprintf(stderr, "ERROR: Not Enough Memmory\n\tFile: %s\n\tLine: %d\n", file, line);
     return NULL;
@@ -56,7 +61,12 @@ void * mymalloc(size_t size, char * file, int line) {
   */
 	curr_block = meta_ptr;		//set curr to beginning of linked list of metadata
 
-	while((curr_block->size < size) || (curr_block->is_free == 0 && curr_block->next != NULL))	//search through list of metadata blocks until find a block that is big enough, is free and the end of list is not reached
+	/****************************************
+ 	* search through list of metadata block *
+ 	* until find a block that is big enough,*
+ 	* is free and end of list is not reached*
+ 	* **************************************/
+	while(((curr_block->size <  size) || (!(curr_block->is_free) && curr_block->next != NULL)) && ((void*)curr_block < meta_ptr->alloc_start))	
 		++curr_block;			//go to the next metadata block
 
 	/****************************************
@@ -91,7 +101,7 @@ void * mymalloc(size_t size, char * file, int line) {
  	* **************************************/
 	else if(curr_block->size > size)	//if the size of the current block of memory is larger then requested
 	{
-		next_block = (void*)(++curr_block);				//set up a new metadata area one block farther
+		next_block = (void*)(curr_block + 1);				//set up a new metadata area one block farther
 		next_block->is_free = 1;					//set the block of memory to free
 		next_block->next = curr_block->next;				//set the new metadata area to point to the next metadata area
 		next_block->size = curr_block->size - size;			//set the new block of memory to the current block of memory minus the requested size
@@ -140,11 +150,59 @@ void * mymalloc(size_t size, char * file, int line) {
 void myfree(void * index, char * file, int line) {
 
   //check if the given index is a valid pointer
-  if (index < (void*)mem || (void*)(mem + 20000) <= index) {
+  if (index < (void*)mem || (void*)(mem + TOTSIZE) <= index) {
     fprintf(stderr, "ERROR: Can only free a valid pointer\n\tFile: %s\n\t%d\n", file, line);
     return;
   }
 
+	mem_block *curr_block = meta_ptr, *prev_block = NULL;	//set a pointer to search through metadata block
+	
+	/****************************************
+ 	* search through each block until the   *
+ 	* end of the metadata area is found or  *
+ 	* the block being searched for is found *
+ 	* **************************************/
+	while(curr_block->alloc_start != index && (void*)curr_block < meta_ptr->alloc_start)
+		curr_block++;
+
+	/****************************************
+ 	* check to see if the index has been	*
+ 	* found if it has not been found report	*
+ 	* error and return			*
+ 	* **************************************/
+	if(curr_block->alloc_start != index)
+	{
+		fprintf(stderr, "ERROR: Pointer is not allocated \n\tFile: %s\n\tLine: %d\n", file, line);
+		return;
+	}
+
+	curr_block->is_free = 1;		//the searched for block has been found so set to free
+	
+	/***************************************
+ 	* check to see if the sorrounding block*
+ 	* are free and join if they are        *
+ 	* *************************************/
+	curr_block = meta_ptr;			//set current block to the beginning of metadata to search through entire list
+	while(curr_block->next != NULL)			//while the next metadata block is not null
+	{
+		if(curr_block->is_free && curr_block->next->is_free)	//if current block is free and next block is free
+		{
+			curr_block->size += curr_block->next->size;	//combine the sizes of the two blocks
+			if(curr_block->next->next == NULL)		//if the next blocks next is null the next block is the end and we only to combine the two blocks
+			{
+				curr_block->next = curr_block->next->next;	//set the current block next to null
+				break;					//break out of loop
+			}
+			prev_block = curr_block;			//set the prev block equal to the current block
+			curr_block = curr_block->next->next;		//advance the current block to two blocks ahead
+			prev_block->next = curr_block; 			//have the freed block skip a block and point to two blocks away
+			continue;					//continue with loop
+		}
+		curr_block = curr_block->next;				//if the current and next blocks were not free keep searching
+	} 
+
+	return;
+  /*
   // check our list of blocks for the given index
   void * ptr = mem;
   if (ptr + 4 == index) {
@@ -165,13 +223,15 @@ void myfree(void * index, char * file, int line) {
     prev = ptr;
     ptr += size(ptr) + 4;
   }
-
+  */
+  /*
   // report if the pointer is not an allocated block
   if (ptr >= (void*)(mem + 20000)) {
     fprintf(stderr, "ERROR: Pointer is not allocated \n\tFile: %s\n\tLine: %d\n", file, line);
     return;
   }
-
+  */
+  /*
   // if we find the block, mark it free and combine with adjacent free blocks
   if (ptr + size(ptr) + 6 < (void*)mem + 20000 && !allocd(ptr + size(ptr) + 4)) {
     // merge with next block if its free
@@ -184,5 +244,5 @@ void myfree(void * index, char * file, int line) {
     // merge with previous block if its free
     size(prev) += size(ptr) + 4;
   }
-
+  */
 }
