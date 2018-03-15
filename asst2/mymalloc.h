@@ -18,7 +18,10 @@ size_t size;			//the size of the allocation
 struct memBlock *next;		//points to the beginning of the next block
 void *alloc_start;		//points to the beginning of the allocated block
 int is_free;			//if the block is free set to 1 and 0 if not free
+int page_num;			//the page number
+int TID;			//the ID of the thread that is occupying this page
 }mem_block;
+
 
 mem_block* mem_split(mem_block *best_fit, size_t size);
 

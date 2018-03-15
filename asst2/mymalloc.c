@@ -6,11 +6,14 @@
 #define size(ptr) *((short*)(ptr))
 #define allocd(ptr) *((short*)((ptr) + 2))
 #define TOTSIZE 8000000
+#define PAGE_SIZE 4092
+#define PAGEAREASTART TOTSIZE - TOTSIZE/4
 
 // Here is our block of memory which is 8MB total size
 // The first 1% of the block is saved for metadata
+// The last 25% of block is reserved for paging requests from library
 static char mem[TOTSIZE];
-mem_block *meta_ptr = (void*)mem;	//meta_ptr will point to the beginning of the allocatable memory where the metadata is stores
+mem_block *meta_ptr = (void*)mem;	//meta_ptr will point to the beginning of the allocatable memory where the metadata is stores 
 
 void * mymalloc(size_t size, char * file, int line, int request) {
 
@@ -24,7 +27,7 @@ void * mymalloc(size_t size, char * file, int line, int request) {
     firstmalloc = 0;
   }
   */
-	mem_block *curr_block = NULL;
+	mem_block *curr_block = NULL, *prev_block = NULL;
 	void* return_value = NULL;
 	
 	/********************************
@@ -32,17 +35,28 @@ void * mymalloc(size_t size, char * file, int line, int request) {
  	* malloc is called set up the	*
  	* first meta data block		*
  	* ******************************/
-	if(!(meta_ptr->size))
+	if(!(meta_ptr->page_num))
 	{
-		meta_ptr->size = TOTSIZE - (TOTSIZE/100);	//set size of block to 99% of total block size
-		meta_ptr->is_free = 1;				//set block to available
-		meta_ptr->next = NULL;				//no next block yet so set to NULL
-		meta_ptr->alloc_start = (void*)(mem + (TOTSIZE/100));	//set beginning of first byte after end of metadata area
+		curr_block = meta_ptr;
+		prev_block = meta_ptr;
+		int mem_index = (TOTSIZE/100);			//to keep track of the offset where of mempages
+		int page_num = 1;				//to assign page numbers
+		while(mem_index < (TOTSIZE - PAGE_SIZE))	//while there is still room to add a new page
+		{
+			curr_block->is_free = 1;		//set page to available
+			curr_block->page_num = page_num++;	//set the page number and advance page number
+			curr_block->TID = 0;			//there is no thread assigned yet so put it to zero
+			curr_block->alloc_start = (void*)(mem + mem_index);//set the beginning address of page
+			mem_index += PAGE_SIZE;			//advance the index to where the next page will start
+			prev_block->next = ++curr_block;	//set the next link for block
+			curr_block->next = NULL;		//set next to NULL as this block will always be the last block
+			++prev_block;				//advance the prev_block position
+		}
 	}
 
   // check if size requested is larger than total mem - metadata 
-  if (size > TOTSIZE - (TOTSIZE - (TOTSIZE/100))) {
-    fprintf(stderr, "ERROR: Not Enough Memmory\n\tFile: %s\n\tLine: %d\n", file, line);
+	if (size > TOTSIZE - (TOTSIZE - (TOTSIZE/100))) {
+		fprintf(stderr, "ERROR: Not Enough Memmory\n\tFile: %s\n\tLine: %d\n", file, line);
     return NULL;
     }
   
@@ -169,7 +183,7 @@ mem_block* mem_split(mem_block *best_fit, size_t size)
 
 	if(best_fit->next == NULL || !(best_fit->next->size))					//if the next metadata slot is not initialized or initialized but empty
 	{
-		next_block = (best_fit + 1);			//set up a new metadata area one block farther
+		next_block = (void*)(best_fit + 1);		//set up a new metadata area one block farther
 		next_block->is_free = 1;			//set the new block of memory to available
 		next_block->next = best_fit->next;		//set the mew metadata area to point to the next meta data area
 		next_block->size = best_fit->size - size;	//set the new block size
