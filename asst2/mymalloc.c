@@ -5,9 +5,10 @@
 // associated with a block in our memory which are stored in the first 4 bytes of eqch block
 #define size(ptr) *((short*)(ptr))
 #define allocd(ptr) *((short*)((ptr) + 2))
-#define TOTSIZE 8000000
+#define TOTSIZE 8388608
 #define PAGE_SIZE 4092
-#define PAGEAREASTART TOTSIZE - TOTSIZE/4
+#define PAGEAREASTART TOTSIZE/100
+#define LIBPAGESTART (TOTSIZE - (TOTSIZE/4))
 
 // Here is our block of memory which is 8MB total size
 // The first 1% of the block is saved for metadata
@@ -39,7 +40,7 @@ void * mymalloc(size_t size, char * file, int line, int request) {
 	{
 		curr_block = meta_ptr;
 		prev_block = meta_ptr;
-		int mem_index = (TOTSIZE/100);			//to keep track of the offset where of mempages
+		int mem_index = PAGEAREASTART;			//to keep track of the offset where of mempages
 		int page_num = 1;				//to assign page numbers
 		while(mem_index < (TOTSIZE - PAGE_SIZE))	//while there is still room to add a new page
 		{
@@ -47,6 +48,7 @@ void * mymalloc(size_t size, char * file, int line, int request) {
 			curr_block->page_num = page_num++;	//set the page number and advance page number
 			curr_block->TID = 0;			//there is no thread assigned yet so put it to zero
 			curr_block->alloc_start = (void*)(mem + mem_index);//set the beginning address of page
+			curr_block->next_page = NULL;		//set the next page to null
 			mem_index += PAGE_SIZE;			//advance the index to where the next page will start
 			prev_block->next = ++curr_block;	//set the next link for block
 			curr_block->next = NULL;		//set next to NULL as this block will always be the last block
@@ -80,9 +82,11 @@ void * mymalloc(size_t size, char * file, int line, int request) {
  	* until find a block that is big enough,*
  	* is free and end of list is not reached*
  	* **************************************/
-	while(((curr_block->size <  size) || (!(curr_block->is_free) && curr_block->next != NULL)) && ((void*)curr_block < meta_ptr->alloc_start))	
-		++curr_block;			//go to the next metadata block
-
+	if(request == 0)				//if the request is not from the threading library
+	{
+		while((!(curr_block->is_free) && (curr_block->next != NULL)) && ((void*)curr_block < (void*)(mem + LIBPAGESTART)))	
+			++curr_block;			//go to the next metadata block
+	}
 	/****************************************
  	* if the requested block of memory	*
  	* overuns the total amount of		*
@@ -99,10 +103,10 @@ void * mymalloc(size_t size, char * file, int line, int request) {
  	* if the requested size if equal to the	*
  	* current size return the current block	*
  	* **************************************/
-	if(curr_block->size == size)
+	if(size <= PAGE_SIZE)
 	{
 		curr_block->is_free = 0;
-		curr_block->size = size;
+		//curr_block->size = size;
 		return_value = curr_block->alloc_start;
 	}
   
@@ -113,8 +117,46 @@ void * mymalloc(size_t size, char * file, int line, int request) {
  	* create a new block memory by 		*
  	* splitting up the existing block	*
  	* **************************************/
-	else if(curr_block->size > size)	//if the size of the current block of memory is larger then requested
+	else if(size > PAGE_SIZE)	//if the size of the current block of memory is larger then requested
 	{
+		int num_page_need = 0;					//how many pages are needed to store memory request
+		int num_page_found = 0;					//how many consequtive pages found
+		if(size % PAGE_SIZE == 0)				//if the size requested is a multiple of page size
+			num_page_need = size/PAGE_SIZE;			//the number of pages needed is size requested divided by the page size
+		else							//if the size requested is not a multiple of page size
+			num_page_need = (size/PAGE_SIZE) + 1;		//the number of pages needed is the size reqested divided by the page size + 1
+		mem_block *saved_block = NULL;				//temporary storage of block
+		//searching for a consequtive blocks that can store the allocation
+		while(curr_block->next != NULL)				//while not at the end of the list
+		{
+			if(num_page_need == num_page_found)		//if the number of free pages found is equal to the number of free pages need
+				break;
+			if(curr_block->is_free && !num_page_found)	//if the current block is free and no free pages have yet been found
+			{
+				saved_block = curr_block;		//save the current block
+				++num_page_found;			//increase the num_page_found variable
+			}
+			else if(curr_block->is_free && num_page_found)	//if current block is free and the number of pages is greater then zero
+				++num_page_found;			//increase the num_page_found varaible
+			else if(!curr_block->is_free && num_page_found)	//if the current block is not free and the num_page_found is greater then zero
+				num_page_found = 0;			//reset num_page_found variable
+			++curr_block;					//increase the curr_block position
+		}
+		if(num_page_need == num_page_found)			//if the needed amount of blocks have been found
+			return_value = saved_block->alloc_start;		//save the return value
+		else							//if the needed amount of block have not been found
+		{
+			fprintf(stderr, "cannot find the amount of memory needed\n");
+			return_value = NULL;				//return NULL
+		}
+		int i = 0;
+		for(i; i <= num_page_need; i++)				//set the link of pages to the next page linked page
+		{
+			saved_block->next_page = saved_block->next;
+			saved_block->is_free = 0;
+			++saved_block;
+		}
+		/*
 		mem_block *best_fit = curr_block;			//keep saving the best fit found so far
 		int best_fit_size = curr_block->size;			//save the best fitting size found so far
 		for(curr_block; curr_block->next != NULL; ++curr_block)
@@ -130,6 +172,7 @@ void * mymalloc(size_t size, char * file, int line, int request) {
 		if(best_fit_size != size)							//block only need to be split if there is a delta between size of block and requested size
 			best_fit = mem_split(best_fit, size);
 		return_value = best_fit->alloc_start;
+		*/
 	}
 
 	else
@@ -252,11 +295,14 @@ void myfree(void * index, char * file, int line, int request) {
 	}
 
 	curr_block->is_free = 1;		//the searched for block has been found so set to free
+	while(curr_block->next_page != NULL)	//reset the next page to NULL
+		curr_block++->next_page = NULL;
 	
 	/***************************************
  	* check to see if the sorrounding block*
  	* are free and join if they are        *
  	* *************************************/
+	/*
 	curr_block = meta_ptr;			//set current block to the beginning of metadata to search through entire list
 	while(curr_block->next != NULL)			//while the next metadata block is not null
 	{
@@ -275,7 +321,7 @@ void myfree(void * index, char * file, int line, int request) {
 		}
 		curr_block = curr_block->next;				//if the current and next blocks were not free keep searching
 	} 	
-
+	*/
 	return;
   /*
   // check our list of blocks for the given index

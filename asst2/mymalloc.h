@@ -16,10 +16,11 @@ typedef struct memBlock
 {
 size_t size;			//the size of the allocation
 struct memBlock *next;		//points to the beginning of the next block
+struct memBlock *next_page;	//points to the next block containing data for the same allocation
 void *alloc_start;		//points to the beginning of the allocated block
-int is_free;			//if the block is free set to 1 and 0 if not free
-int page_num;			//the page number
-int TID;			//the ID of the thread that is occupying this page
+short is_free;			//if the block is free set to 1 and 0 if not free
+short page_num;			//the page number
+int  TID;			//the ID of the thread that is occupying this page
 }mem_block;
 
 
