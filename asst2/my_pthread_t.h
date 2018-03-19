@@ -38,6 +38,11 @@
 
 enum thread_status {active, yield, wait_thread, wait_mutex, thread_exit};
 
+typedef struct page_node {
+	void* page_meta;		// pointer to metadata associated with the first page of this allocation
+	struct page_node* next;		// pointer to next allocation
+} page_node_t;
+
 typedef struct my_pthread {
         int id;                  	//integer identifier of thread
         int priority;                   // current priority level of this thread
@@ -46,6 +51,7 @@ typedef struct my_pthread {
 	enum thread_status status;      // the threads current status
 	void* ret;                      //return value of the thread
         ucontext_t uc;                  //execution context of given thread
+	page_node_t* page_list;		// list of page-lists, should be one for each malloc cal	
 } my_pthread_t;
 
 typedef struct tid_node {

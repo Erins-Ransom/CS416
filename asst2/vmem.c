@@ -15,8 +15,8 @@ my_pthread_t running_thread;
 
 void vmem_sig_handler(int signo, siginfo_t *info, void *context)
 {
-	int index = (int)((intptr_t)info->si_addr/PAGE_SIZE);					//page thread attempting to access
-	void* swap_out = thread_space + index*PAGE_SIZE;					//page that thread was denied access to
+	int index = (int)((intptr_t)info->si_addr/PAGE_SIZE);					
+	void* swap_out = thread_space + index*PAGE_SIZE;				
 	
 	page_node_t* ptr = running_thread.pages;
 	int i;
@@ -24,9 +24,8 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context)
 		ptr = ptr->next;
 	}
 
-	void* swap_in = thread_space + ptr->page_num*PAGE_SIZE;					//page that thread means to access
+	void* swap_in = thread_space + ptr->page_num*PAGE_SIZE;				
 
-	//swap pages
 	memcpy(page_temp, swap_out, PAGE_SIZE);
 	memcpy(swap_out, swap_in, PAGE_SIZE);
 	memcpy(swap_in, page_temp, PAGE_SIZE);
