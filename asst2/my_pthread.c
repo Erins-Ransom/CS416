@@ -11,15 +11,6 @@
 #define THREAD_LIM 1000		// maximum number of threads allowed
 #define MUTEX_LIM 1000		// maximum number of mutexes allowed
 
-
-// These two macros are for accessing the size metadata and allocated metadata of a pointer
-// associated with a block in our memory which are stored in the first 4 bytes of eqch block
-#define size(ptr) *((int*)(ptr))
-#define allocd(ptr) *((short*)((ptr) + 4))
-#define MEM_SIZE 8192000
-#define PAGE_SIZE 4096
-
-
 // ___________________ Globals ______________________________
 
 static char * mem;				// simulated main memory
@@ -40,6 +31,223 @@ static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
 static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
 static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
 
+// __________________ Paging Stuff _________________________
+
+#define PAGE_SIZE 4096
+#define NUM_PAGES 32
+
+static void* memory;        			//memory for paging
+static page_meta_t page_data[NUM_PAGES];        //memory for metadata
+struct sigaction act;
+
+void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
+        
+	void* wrong_page, *right_page;
+	int i, swapout, swapin, index;
+	page_meta_t* ptr;
+
+	index = ((intptr_t)info->si_addr - (intptr_t)memory)/PAGE_SIZE + 1;
+
+        // address of page that the thread tried to access
+	wrong_page = memory + (index-1)*PAGE_SIZE; 
+ 
+	// address of page that the thread wanted to access
+	ptr = running_thread->page_list;
+	for(i = 1; i < index; i++) {
+		ptr = ptr->next;
+	} 
+	right_page = ptr->page;	
+
+	// finds the index of the metadata associated with the page that will be swapped out
+	for(i = 0; i < NUM_PAGES; i++) {
+		if(page_data[i].page == wrong_page) {
+			swapout = i;
+			break;
+		}
+	}
+
+	// finds the index of the metadata associated with the page that will be swapped in
+	for(i = 0; i < NUM_PAGES; i++) {
+                if(page_data[i].page == right_page) {
+                        swapin = i;
+                        break;
+                }
+        }
+
+
+	// unlock wrong page	
+	mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+	
+	// swap space
+        char temp_page[PAGE_SIZE];
+
+        // swap pages
+        memcpy(temp_page, wrong_page, PAGE_SIZE);	// temp <- P1
+        memcpy(wrong_page, right_page, PAGE_SIZE);      // P1 <- P2
+        memcpy(right_page, temp_page, PAGE_SIZE);      // P2 <- temp (<- P1)
+
+        // swap page links
+        page_data[swapin].page = right_page;
+        page_data[swapout].page = wrong_page;
+
+	// restore protections
+	mprotect(right_page, PAGE_SIZE, PROT_NONE);
+
+	return;
+}
+
+void page_malloc_init() {
+       
+	memory = memalign( getpagesize(), PAGE_SIZE*NUM_PAGES);
+	 
+        act.sa_sigaction = vmem_sig_handler;
+        act.sa_flags = SA_SIGINFO;
+        sigaction(SIGSEGV, &act, NULL);
+
+        int i;
+        for(i = 0; i < NUM_PAGES; i++) {
+                page_data[i].page = (void*)memory + i*PAGE_SIZE;
+                page_data[i].next = NULL;
+                page_data[i].prev = NULL;
+                page_data[i].more = 0;
+		page_data[i].free = 1;
+                page_data[i].TID = -1;
+        }
+}
+
+void * page_malloc(size_t size, char * file, int line, int request) {
+
+        int pages_needed, pages_remaining, i, pos;
+        void* ret = NULL;
+
+	// determine number of pages needed to fulfill request (at least 1)
+	if(size % PAGE_SIZE == 0) {
+                pages_needed = size/PAGE_SIZE;
+        } else {
+                pages_needed = (int)(size/PAGE_SIZE) + 1;
+        }
+
+	// list of free pages that will possibly be used for allocation
+	int free_pages[pages_needed];
+        pos = 0;
+
+	// find free pages, and add them to a list
+	pages_remaining = pages_needed;
+        for(i = 0; i < NUM_PAGES; i++) {
+                if(page_data[i].free)   {
+                        free_pages[pos] = i;
+                        pos++;
+                        pages_remaining--;
+                        if(pages_remaining == 0) {
+                                break;
+                        }
+                }
+        }
+
+	// reached end of the list and pages still needed -> insufficient memory
+	if(pages_remaining != 0) {
+                errno = ENOMEM;
+                return NULL;
+        }
+
+	// link up pages
+	for(i = 0; i < pages_needed; i++) {
+                page_data[ free_pages[i] ].free = 0;
+		page_data[ free_pages[i] ].TID = running_thread->id;
+
+		//indicate continuous allocation
+		if(i == pages_needed - 1) {
+			page_data[ free_pages[i] ].more = 0;
+		} else {
+			page_data[ free_pages[i] ].more = 1;
+		}
+
+		// foreward links 
+		if(i == pages_needed - 1) {     // last page
+			page_data[ free_pages[i] ].next = NULL;
+                } else {
+                        page_data[ free_pages[i] ].next = &page_data[ free_pages[i+1] ];
+                }
+	
+		// backward links
+		if(i == 0) {    // first page
+			page_data[ free_pages[i] ].prev = NULL;
+                } else {
+                        page_data[ free_pages[i] ].prev = &page_data[ free_pages[i-1] ];
+                }
+
+        }
+
+	// append this call to the list of allocations for this thread
+	page_meta_t* ptr = running_thread->page_list;
+
+	if(ptr == NULL)	{ //list empty
+		running_thread->page_list = &page_data[ free_pages[0] ];
+	
+	} else {	//list non-empty
+		while(ptr->next != NULL) {
+			ptr = ptr->next;
+		}
+
+		ptr->next = &page_data[ free_pages[0] ];
+		page_data[ free_pages[0] ].prev = ptr;
+	}
+
+	ret = (void*)((intptr_t)memory + (intptr_t)running_thread->num_pages*PAGE_SIZE + 1);	//get next continuous address
+	running_thread->num_pages += pages_needed;				//update memory usage
+
+        return  ret; /*page_data[ free_pages[0] ].page*/
+}
+
+void page_free(void * index, char * file, int line, int request) {
+	
+	page_meta_t* ptr = running_thread->page_list;
+
+	// find the beginning of the allocation
+	while(ptr != NULL) {
+		if(ptr->page == index) {
+			break;
+		}
+		ptr = ptr->next;
+	}
+
+	// invalid address
+	if(ptr == NULL) {
+		errno = EINVAL;
+		return;
+	}
+
+	
+	page_meta_t* cut1 = ptr->prev; // node that will be spliced with other end of the free'ed allocation
+	
+	// find end of the allocation
+	while(ptr->more != 0) {
+		ptr = ptr->next;
+	}
+
+	page_meta_t* cut2 = ptr->next; // node that will be spliced with before the beginning of the free'd allocation
+
+	int free_pages = 0;
+	
+	// free pages
+	ptr = cut1->next;
+	while(ptr != NULL) {
+		if(ptr == cut2) {
+			break;
+		} else {
+			ptr->free = 1;
+			free_pages++;
+			ptr = ptr->next;
+		}
+	}
+
+	cut1->next = cut2;
+	cut2->prev = cut1;
+	
+	running_thread->num_pages -= free_pages;	
+
+	return;
+}
 
 // _________________ Utility Functions _____________________
 
@@ -136,6 +344,8 @@ void scheduler_alarm_handler(int signum);
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
+	page_malloc_init();
+
 	thread_count = 1;		//generates the first TID which will be 1
 	tid_list = NULL;		//list starts empty	
 	
@@ -207,18 +417,6 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	return 0;
 }
 
-
-// Function to clean up the scheduler
-void scheduler_clean() {
-
-}
-
-//queue priority stuff
-int maintenance_cycle(void) {
-	
-	return 0;
-}
-
 //Signal handler to activate the scheduler on periodic SIGVTALRM, this is the body of the scheduler
 void scheduler_alarm_handler(int signum) {
 	// pause the timer
@@ -270,6 +468,23 @@ void scheduler_alarm_handler(int signum) {
 	// select new thread to run and set it as the running thread then swap to the new context
 	my_pthread_t * prev_thread = running_thread;
 	running_thread = get_next(priority_level[current_priority]);
+	
+	// mprotect all of prev_thread's memory
+	page_meta_t* ptr = prev_thread->page_list;
+	while(ptr != NULL) {
+		mprotect(ptr->page, PAGE_SIZE, PROT_NONE);
+		ptr = ptr->next;
+	}	
+
+	// unlock all of running_thread's memory	
+	if(running_thread != NULL) {
+		ptr = running_thread->page_list;
+		while(ptr != NULL) {
+			mprotect(ptr->page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+			ptr = ptr->next;	
+		}
+	}
+
 	while (!running_thread) {
 		current_priority = (current_priority + 1)%NUM_PRIORITY;
 		running_thread = get_next(priority_level[current_priority]);
@@ -333,6 +548,9 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	enqueue(thread, priority_level[0]);
 	thread->status = active;
 
+	thread->num_pages = 0;
+	thread->page_list = NULL;
+	
 	// resume timer
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	return 0;
@@ -558,111 +776,3 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
 	return 0;
 }
-
-
-
-
-void * myallocate(size_t size, char * file, int line, int flag) {
-
-	static short firstmalloc = 1;
-
-	// check if this is the first allocation of memory and set up initial metadata
-	if (firstmalloc) {
-		mem = memalign(PAGE_SIZE, MEM_SIZE);
-		size(mem) = MEM_SIZE-6; 
-		allocd(mem) = 0; 
-		firstmalloc = 0;
-    
-	}
-
-	// check if size is larger than total mem - metadata 
-	if (size > MEM_SIZE-6) {
-		fprintf(stderr, "ERROR: Not Enough Memmory\n\tFile: %s\n\tLine: %d\n", file, line);
-		return NULL;
-	}
-  
-	// go through the "linked list" of blocks until we find an available block big enough, if we hit the end,
-	// return NULL and report the lack of space
-	void * ptr = mem;
-	while (ptr < (void*)(mem + MEM_SIZE)) {
-		// a block must be either exactly the right size or have enough extra space to accomodate the 
-		// metadata for the free block containing the leftover space 
-		if (!allocd(ptr) && (size(ptr) == size || size(ptr) >= size + 6)) {
-			break;
-		}
-		ptr += size(ptr) + 6;
-	}
-
-	if (ptr >= (void*)(mem + MEM_SIZE)) {
-		fprintf(stderr, "ERROR: Not Enough Memory\n\tFile: %s\n\tLine: %d\n", file, line);
-    		return NULL;
-  	}
-
-  	// if a suitable block is found and there is leftover space, divide it into an allocated and free block, 
- 	// otherwise, simply mark the block as allocated, then return a pointer to the allocated block
-  	if (size(ptr) > size) {
-    		short leftover = size(ptr) - size - 6;
-    		size(ptr) = size;
-
-    		size(ptr + size + 6) = leftover;
-   		allocd(ptr + size + 6) = 0;
-  	}
-
-  	allocd(ptr) = 1;
-
-  	return ptr + 6;
-}
-
-
-void mydeallocate(void * index, char * file, int line, int flag) {
-
-  	//check if the given index is a valid pointer
-  	if (index < (void*)mem || (void*)(mem + MEM_SIZE) <= index) {
-    		fprintf(stderr, "ERROR: Can only free a valid pointer\n\tFile: %s\n\t%d\n", file, line);
-    		return;
-  	}
-
-  	// check our list of blocks for the given index
-  	void * ptr = mem;
-  	if (ptr + 6 == index) {
-    		// free and merge if the pointer is at the begining of the list
-    		if (!allocd(ptr + size(ptr) + 6)) {
-      			size(ptr) += size(ptr + size(ptr) + 6) + 6;
-    		}
-    		allocd(ptr) = 0;
-    		return;
-  	}
-
-  	void * prev = ptr;
-  	ptr += size(ptr) + 6;
-
-  	while(ptr < (void*)(mem + MEM_SIZE)) {
-    		if (ptr + 6 == index && allocd(ptr)) {
-      			break; 
-    		}
-    		prev = ptr;
-    		ptr += size(ptr) + 6;
-  	}
-
-  	// report if the pointer is not an allocated block
-  	if (ptr >= (void*)(mem + MEM_SIZE)) {
-    		fprintf(stderr, "ERROR: Pointer is not allocated \n\tFile: %s\n\tLine: %d\n", file, line);
-    		return;
-  	}
-
-  	// if we find the block, mark it free and combine with adjacent free blocks
-  	if (ptr + size(ptr) + 8 < (void*)mem + MEM_SIZE && !allocd(ptr + size(ptr) + 6)) {
-    		// merge with next block if its free
-    		size(ptr) += size(ptr + size(ptr) + 6) + 6;
-  	}
-
-  	allocd(ptr) = 0;
-
-  	if (!allocd(prev)) {
-    		// merge with previous block if its free
-    		size(prev) += size(ptr) + 6;
-  	}
-
-}
-
-
