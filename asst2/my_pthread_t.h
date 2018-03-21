@@ -30,12 +30,10 @@
 #define pthread_mutex_destroy my_pthread_mutex_destroy
 #endif
 
-/*
-#define THREADREQ 0
+#define THREADREQ 1
 #define LIBRARYREQ 666
 #define malloc(x) page_malloc(x, __FILE__, __LINE__, THREADREQ);
 #define free(x) page_free(x, __FILE__, __LINE__, THREADREQ);
-*/
 
 // ____________________ Struct Defs ________________________
 
@@ -48,6 +46,7 @@ typedef struct page_meta {
         short free;                     // if the page is free set to 1 and 0 if not free  
 	short more;			// flag to indicate whether an allocation continues on to the next page      
         int  TID;                       // the ID of the thread that is occupying this page
+	
 } page_meta_t;
 
 typedef struct my_pthread {

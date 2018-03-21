@@ -3,42 +3,42 @@
 
 #include "my_pthread_t.h"
 
-
 // _________________ Macros _______________________________
 
-#define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 5		//number of static priority levels
+#define STACK_SIZE 8000		// default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
+#define NUM_PRIORITY 5		// number of static priority levels
 #define THREAD_LIM 1000		// maximum number of threads allowed
 #define MUTEX_LIM 1000		// maximum number of mutexes allowed
 
 // ___________________ Globals ______________________________
 
-static char * mem;				// simulated main memory
-static ucontext_t main_context;			// execution context for main 
-static Queue * priority_level[NUM_PRIORITY]; 	// array of pointers to queues associated with static priority levels
-static Queue * death_row;			// queue for threads waiting to die
-static int current_priority;			// current piority level that is being run
-static int run_at_priority;			// threads run at the current priority
-static struct itimerval * timer;		// timer to periodically activate the scheduler
-static struct itimerval * pause;		// a zero itimerval used to pause the timer
-static struct itimerval * cont;			// a place to store the current time
-static my_pthread_t * running_thread;		// reference to the currently running thread
-static short init;				// flag for if the scheduler has been initialized
-static int thread_count;			// Counter to generate new, sequential TIDs
-static tid_node_t * tid_list;			// pointer to front of list of available TIDs
-static my_pthread_t * thread_table[THREAD_LIM];	// references to all current threads
-static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
-static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
-static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
+static char * mem;					// simulated main memory
+static ucontext_t main_context;				// execution context for main 
+static Queue * priority_level[NUM_PRIORITY]; 		// array of pointers to queues associated with static priority levels
+static Queue * death_row;				// queue for threads waiting to die
+static int current_priority;				// current piority level that is being run
+static int run_at_priority;				// threads run at the current priority
+static struct itimerval * timer;			// timer to periodically activate the scheduler
+static struct itimerval * pause;			// a zero itimerval used to pause the timer
+static struct itimerval * cont;				// a place to store the current time
+static my_pthread_t * running_thread;			// reference to the currently running thread
+static short init;					// flag for if the scheduler has been initialized
+static int thread_count;				// Counter to generate new, sequential TIDs
+static tid_node_t * tid_list;				// pointer to front of list of available TIDs
+static my_pthread_t * thread_table[THREAD_LIM];		// references to all current threads
+static my_pthread_t * waiting[THREAD_LIM];		// references to waiting threads
+static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; 	// list of active mutexes
+static volatile sig_atomic_t done[THREAD_LIM];		// flag for if a thread has finished
 
 // __________________ Paging Stuff _________________________
 
 #define PAGE_SIZE 4096
-#define NUM_PAGES 32
+#define NUM_PAGES 256
 
 static void* memory;        			//memory for paging
 static page_meta_t page_data[NUM_PAGES];        //memory for metadata
-struct sigaction act;
+static struct sigaction act;
+static int page_init;				// flag for first malloc
 
 void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
       
@@ -103,7 +103,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	return;
 }
 
-void page_malloc_init() {
+void page_malloc_init() {	// gets called in scheduler init
        
 	memory = memalign( getpagesize(), PAGE_SIZE*NUM_PAGES);		// allocates memory for paging
 	 
@@ -135,6 +135,12 @@ void * page_malloc(size_t size, char * file, int line, int request) {
 
         int pages_needed, pages_remaining, i, pos;
         void* ret = NULL;
+
+	if(!page_init) {
+		page_malloc_init();
+		page_init = 1;
+	}
+
 
 	// determine number of pages needed to fulfill request (at least 1)
 	if(size % PAGE_SIZE == 0) {
@@ -371,8 +377,6 @@ void scheduler_alarm_handler(int signum);
 
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
-
-	page_malloc_init();
 
 	thread_count = 1;		//generates the first TID which will be 1
 	tid_list = NULL;		//list starts empty	
