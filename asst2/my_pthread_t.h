@@ -42,28 +42,23 @@
 enum thread_status {active, yield, wait_thread, wait_mutex, thread_exit};
 
 typedef struct page_meta {
-        void* page;                     //points to page in memory
-        struct page_meta* next;         //next page in memory owned by thread           
-        struct page_meta* prev;         //previous page in memory owned by thread
-        short free;                     //if the page is free set to 1 and 0 if not free  
-	short more;			//flag to indicate whether an allocation continues on to the next page      
-        int  TID;                       //the ID of the thread that is occupying this page
+        void* page;                     // points to page in memory
+        struct page_meta* next;         // next page in memory owned by thread           
+        struct page_meta* prev;         // previous page in memory owned by thread
+        short free;                     // if the page is free set to 1 and 0 if not free  
+	short more;			// flag to indicate whether an allocation continues on to the next page      
+        int  TID;                       // the ID of the thread that is occupying this page
 } page_meta_t;
 
-typedef struct page_node {
-	page_meta_t* page_meta;		// pointer to metadata associated with the first page of this allocation
-	struct page_node* next;		// pointer to next allocation
-} page_node_t;
-
 typedef struct my_pthread {
-        int id;                  	//integer identifier of thread
+        int id;                  	// integer identifier of thread
         int priority;                   // current priority level of this thread
         int intervals_run;              // the number of concecutive intervals this thread has run
         int wait_id;			// TID of thread being waited on
 	enum thread_status status;      // the threads current status
-	void* ret;                      //return value of the thread
-        ucontext_t uc;                  //execution context of given thread
-	page_meta_t* page_list;		// list of pages associated with this thread
+	void* ret;                      // return value of the thread
+        ucontext_t uc;                  // execution context of given thread
+	page_meta_t* page_list;		// list of pages associated with this thread; in order of allocation
 	int num_pages;			// number of pages owned by thread
 } my_pthread_t;
 
@@ -73,12 +68,12 @@ typedef struct tid_node {
 } tid_node_t;
 
 typedef struct Node {
-        my_pthread_t * thread;
-        struct Node * next;
+        my_pthread_t* thread;
+        struct Node* next;
 } Node;
 
 typedef struct Queue {
-        Node * back;
+        Node* back;
         int size;
 } Queue;
 
@@ -121,10 +116,16 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex);
 // Destroys a given mutex. Mutex should be unlocked before doing so.
 int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex);
 
+// Swaps pages on page fault
 void vmem_sig_handler(int signo, siginfo_t *info, void *context);
+
+// Initialized memory for paging
 void page_malloc_init();
+
+// Allocates pages to a thread
 void * page_malloc(size_t size, char * file, int line, int request);
+
+// Deallocates pages back to free state
 void page_free(void * index, char * file, int line, int request);
-void page_swap(int P1, int P2);
 
 #endif

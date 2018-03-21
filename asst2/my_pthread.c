@@ -41,56 +41,63 @@ static page_meta_t page_data[NUM_PAGES];        //memory for metadata
 struct sigaction act;
 
 void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
-        
-	void* wrong_page, *right_page;
-	int i, swapout, swapin, index;
+      
+	int i, swapout, swapin;
 	page_meta_t* ptr;
 
-	index = ((intptr_t)info->si_addr - (intptr_t)memory)/PAGE_SIZE + 1;
+	/*
+ 	 * This value represents several things:
+ 	 * - the position of the page in a thread's page_list that it tried to access
+ 	 * - the position of the actual frame the thread tried to access in memory
+ 	 * - from this value the signal handler will determine which pages to swap
+ 	 */
+	int index = ((intptr_t)info->si_addr - (intptr_t)memory)/PAGE_SIZE + 1;
 
-        // address of page that the thread tried to access
-	wrong_page = memory + (index-1)*PAGE_SIZE; 
- 
-	// address of page that the thread wanted to access
-	ptr = running_thread->page_list;
+
+	/*
+         * this block of code identifies the location of the metadata associated 
+	 * with the page the thread tried to access. It takes the pointer to the
+	 * page dervied from index and iterates through the metadata array until
+	 * it finds a match
+         */
+	void* wrong_page = memory + (index-1)*PAGE_SIZE;  	// address of page that the thread tried to access
+	ptr = running_thread->page_list; 		// address of page that the thread wanted to access within it's own page_list
 	for(i = 1; i < index; i++) {
 		ptr = ptr->next;
 	} 
-	right_page = ptr->page;	
-
-	// finds the index of the metadata associated with the page that will be swapped out
-	for(i = 0; i < NUM_PAGES; i++) {
+	void* right_page = ptr->page;	
+	for(i = 0; i < NUM_PAGES; i++) { 		// finds the index of the metadata associated with the page that will be swapped out
 		if(page_data[i].page == wrong_page) {
 			swapout = i;
 			break;
 		}
 	}
 
-	// finds the index of the metadata associated with the page that will be swapped in
+	/*
+	 * does a similar thing to the previous block in that it finds the
+	 * metadata associated with the page the thread wanted to access
+	 * by iterating through page_data
+	 */
 	for(i = 0; i < NUM_PAGES; i++) {
                 if(page_data[i].page == right_page) {
                         swapin = i;
                         break;
                 }
         }
-
-
-	// unlock wrong page	
-	mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
 	
-	// swap space
-        char temp_page[PAGE_SIZE];
-
-        // swap pages
-        memcpy(temp_page, wrong_page, PAGE_SIZE);	// temp <- P1
-        memcpy(wrong_page, right_page, PAGE_SIZE);      // P1 <- P2
-        memcpy(right_page, temp_page, PAGE_SIZE);      // P2 <- temp (<- P1)
-
-        // swap page links
-        page_data[swapin].page = right_page;
+	/*
+	 * this block of code swaps the page in memory
+	 * the location of the metadata does change
+	 * but the value of the pointer that references
+	 * the page in memory is updated to reflect the swap
+	 */
+	mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);	 // unlock wrong page
+        char temp_page[PAGE_SIZE];					 // swap space
+        memcpy(temp_page, wrong_page, PAGE_SIZE);
+        memcpy(wrong_page, right_page, PAGE_SIZE); 
+        memcpy(right_page, temp_page, PAGE_SIZE);  
+        page_data[swapin].page = right_page;	// swap page links
         page_data[swapout].page = wrong_page;
-
-	// restore protections
 	mprotect(right_page, PAGE_SIZE, PROT_NONE);
 
 	return;
@@ -98,12 +105,21 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 
 void page_malloc_init() {
        
-	memory = memalign( getpagesize(), PAGE_SIZE*NUM_PAGES);
+	memory = memalign( getpagesize(), PAGE_SIZE*NUM_PAGES);		// allocates memory for paging
 	 
+	/*
+	 * this block sets up the signal handler
+	 * and allows it to access the address that
+	 * caused the segfault
+	 */
         act.sa_sigaction = vmem_sig_handler;
         act.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &act, NULL);
 
+	/*
+         * this block initializes the structs that
+	 * hold the metadata for the paged memory 
+         */
         int i;
         for(i = 0; i < NUM_PAGES; i++) {
                 page_data[i].page = (void*)memory + i*PAGE_SIZE;
@@ -127,12 +143,15 @@ void * page_malloc(size_t size, char * file, int line, int request) {
                 pages_needed = (int)(size/PAGE_SIZE) + 1;
         }
 
-	// list of free pages that will possibly be used for allocation
-	int free_pages[pages_needed];
+	/*
+	 * this block of code searched the page metadata
+	 * and adds free pages to a list trying to fulfill
+	 * the request. If not enough free pages can be found,
+	 * errno is set and NULL is returned
+	 */
+	int free_pages[pages_needed];  			// list of free pages that will possibly be used for allocation
         pos = 0;
-
-	// find free pages, and add them to a list
-	pages_remaining = pages_needed;
+	pages_remaining = pages_needed; 		// find free pages, and add them to a list
         for(i = 0; i < NUM_PAGES; i++) {
                 if(page_data[i].free)   {
                         free_pages[pos] = i;
@@ -143,34 +162,32 @@ void * page_malloc(size_t size, char * file, int line, int request) {
                         }
                 }
         }
-
-	// reached end of the list and pages still needed -> insufficient memory
-	if(pages_remaining != 0) {
+	if(pages_remaining != 0) {	 		// reached end of the list and pages still needed -> insufficient memory
                 errno = ENOMEM;
                 return NULL;
         }
 
-	// link up pages
+	/*
+	 * this loop takes the free pages searched in the
+	 * last block and links them together with forward
+	 * and backward links. It also marks them as allocated
+	 * and as a continuous allocation if more than one 
+	 * page was needed.
+	 */
 	for(i = 0; i < pages_needed; i++) {
                 page_data[ free_pages[i] ].free = 0;
 		page_data[ free_pages[i] ].TID = running_thread->id;
-
-		//indicate continuous allocation
-		if(i == pages_needed - 1) {
+		if(i == pages_needed - 1) {				//indicate continuous allocation
 			page_data[ free_pages[i] ].more = 0;
 		} else {
 			page_data[ free_pages[i] ].more = 1;
-		}
-
-		// foreward links 
-		if(i == pages_needed - 1) {     // last page
+		} 
+		if(i == pages_needed - 1) {				// foreward links
 			page_data[ free_pages[i] ].next = NULL;
                 } else {
                         page_data[ free_pages[i] ].next = &page_data[ free_pages[i+1] ];
                 }
-	
-		// backward links
-		if(i == 0) {    // first page
+		if(i == 0) { 						// backward lnks
 			page_data[ free_pages[i] ].prev = NULL;
                 } else {
                         page_data[ free_pages[i] ].prev = &page_data[ free_pages[i-1] ];
@@ -178,58 +195,71 @@ void * page_malloc(size_t size, char * file, int line, int request) {
 
         }
 
-	// append this call to the list of allocations for this thread
+	/*
+	 * this block appends the list assembled
+	 * in the last block to the end of the page_list
+	 * associated with the calling thread
+	 */
 	page_meta_t* ptr = running_thread->page_list;
-
 	if(ptr == NULL)	{ //list empty
 		running_thread->page_list = &page_data[ free_pages[0] ];
-	
 	} else {	//list non-empty
 		while(ptr->next != NULL) {
 			ptr = ptr->next;
 		}
-
 		ptr->next = &page_data[ free_pages[0] ];
 		page_data[ free_pages[0] ].prev = ptr;
 	}
 
+	/*
+	 * these lines return an address continuous with previous allocations for this thread
+	 * and update the number of pages that have been allocated to the calling thread
+	 */
 	ret = (void*)((intptr_t)memory + (intptr_t)running_thread->num_pages*PAGE_SIZE + 1);	//get next continuous address
-	running_thread->num_pages += pages_needed;				//update memory usage
+	running_thread->num_pages += pages_needed;						//update memory usage
 
-        return  ret; /*page_data[ free_pages[0] ].page*/
+        return  ret;
 }
 
 void page_free(void * index, char * file, int line, int request) {
-	
-	page_meta_t* ptr = running_thread->page_list;
 
-	// find the beginning of the allocation
-	while(ptr != NULL) {
+	/*
+	 * this block finds the allocation within the thread's
+	 * page_list. If the address cannot be found errno is set
+	 * and the function returns
+	 */	
+	page_meta_t* ptr = running_thread->page_list;
+	while(ptr != NULL) {			 // find the beginning of the allocation
 		if(ptr->page == index) {
 			break;
 		}
 		ptr = ptr->next;
 	}
-
-	// invalid address
-	if(ptr == NULL) {
+	if(ptr == NULL) {	// invalid address
 		errno = EINVAL;
 		return;
 	}
 
-	
-	page_meta_t* cut1 = ptr->prev; // node that will be spliced with other end of the free'ed allocation
-	
-	// find end of the allocation
-	while(ptr->more != 0) {
+	/*
+	 * this block uses the "more" flag to 
+	 * find the continuous section of pages
+	 * that must be removed from the calling thread's
+	 * page_list and marked as free
+	 */
+	page_meta_t* cut1 = ptr->prev; 	// node that will be spliced with other end of the free'ed allocation
+	while(ptr->more != 0) {		// find end of the allocation
 		ptr = ptr->next;
 	}
+	page_meta_t* cut2 = ptr->next; 	// node that will be spliced with before the beginning of the free'd allocation
 
-	page_meta_t* cut2 = ptr->next; // node that will be spliced with before the beginning of the free'd allocation
-
-	int free_pages = 0;
-	
-	// free pages
+	/*
+	 * this block frees the pages that were removed from the 
+	 * callling thread's page_list in the previous block
+	 * and resets them to the free state
+	 * the number of pages allocated to the calling thread
+	 * is updated
+	 */
+	int free_pages = 0;	
 	ptr = cut1->next;
 	while(ptr != NULL) {
 		if(ptr == cut2) {
@@ -240,10 +270,8 @@ void page_free(void * index, char * file, int line, int request) {
 			ptr = ptr->next;
 		}
 	}
-
 	cut1->next = cut2;
 	cut2->prev = cut1;
-	
 	running_thread->num_pages -= free_pages;	
 
 	return;
