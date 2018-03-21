@@ -6,14 +6,30 @@
 
 // _________________ Macros _______________________________
 
-#define STACK_SIZE 8000		//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
-#define NUM_PRIORITY 5		//number of static priority levels
-#define THREAD_LIM 1000		// maximum number of threads allowed
-#define MUTEX_LIM 1000		// maximum number of mutexes allowed
+#define PAGE_SIZE 4096
+#define NUM_PAGES 2000
+#define STACK_SIZE (4*PAGE_SIZE)	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
+#define NUM_PRIORITY 5			//number of static priority levels
+#define THREAD_LIM 30			// maximum number of threads allowed
+#define MUTEX_LIM 100			// maximum number of mutexes allowed
+
+// These two macros are for accessing the size metadata and allocated metadata of a pointer
+// associated with a block in our memory which are stored in the first 4 bytes of eqch block
+#define size(ptr) *((int*)(ptr))
+#define allocd(ptr) *((short*)((ptr) + 4))
+
 
 // ___________________ Globals ______________________________
 
-static char * mem;				// simulated main memory
+static void * memory;				// simulated main memory
+static short * page_meta;			// pointer to the page metadata in memeory
+static void * private_mem;			// pointer to the area of memory reserved for the scheduler
+static int private_lim;
+static void * public_mem;			// pointer to the area of memory for gerneral thread use
+static int public_lim;
+static int public_pages;
+static void * shared_mem;			// pointer to the area of memory for shared use
+static int shared_lim;
 static ucontext_t main_context;			// execution context for main 
 static Queue * priority_level[NUM_PRIORITY]; 	// array of pointers to queues associated with static priority levels
 static Queue * death_row;			// queue for threads waiting to die
@@ -30,258 +46,315 @@ static my_pthread_t * thread_table[THREAD_LIM];	// references to all current thr
 static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
 static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
 static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
+static struct sigaction act;
 
-// __________________ Paging Stuff _________________________
 
-#define PAGE_SIZE 4096
-#define NUM_PAGES 32
 
-static void* memory;        			//memory for paging
-static page_meta_t page_data[NUM_PAGES];        //memory for metadata
-struct sigaction act;
+// _________________ Memory Management ____________________
+
 
 void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
-      
-	int i, swapout, swapin;
-	page_meta_t* ptr;
 
-	/*
- 	 * This value represents several things:
- 	 * - the position of the page in a thread's page_list that it tried to access
- 	 * - the position of the actual frame the thread tried to access in memory
- 	 * - from this value the signal handler will determine which pages to swap
- 	 */
-	int index = ((intptr_t)info->si_addr - (intptr_t)memory)/PAGE_SIZE + 1;
+        // pause the timer
+        setitimer(ITIMER_VIRTUAL, pause, cont);
 
-
-	/*
-         * this block of code identifies the location of the metadata associated 
-	 * with the page the thread tried to access. It takes the pointer to the
-	 * page dervied from index and iterates through the metadata array until
-	 * it finds a match
+        /*
+         * This value represents several things:
+         * - the position of the page in a thread's page_list that it tried to access
+         * - the position of the actual frame the thread tried to access in memory
+         * - from this value the signal handler will determine which pages to swap
          */
-	void* wrong_page = memory + (index-1)*PAGE_SIZE;  	// address of page that the thread tried to access
-	ptr = running_thread->page_list; 		// address of page that the thread wanted to access within it's own page_list
-	for(i = 1; i < index; i++) {
-		ptr = ptr->next;
-	} 
-	void* right_page = ptr->page;	
-	for(i = 0; i < NUM_PAGES; i++) { 		// finds the index of the metadata associated with the page that will be swapped out
-		if(page_data[i].page == wrong_page) {
-			swapout = i;
+        int index = ((intptr_t)info->si_addr - (intptr_t)public_mem)/PAGE_SIZE;
+
+        /*
+         * this block of code identifies the location of the metadata associated
+         * with the page the thread tried to access. It takes the pointer to the
+         * page dervied from index and iterates through the metadata array until
+         * it finds a match
+         */
+        void * wrong_page = public_mem + index*PAGE_SIZE;        // address of page that the thread tried to access
+
+	// if the page has not been used yet, assign it to the current thread and unprotect it
+	if (page_meta[2*index] < 0) {
+		page_meta[2*index] = running_thread->id;
+		page_meta[2*index + 1] = index;
+		running_thread->num_pages++;
+		mprotect(wrong_page, PAGE_SIZE, PROT_NONE);
+		return;
+	}
+
+	int swap_index = 0;
+	while (swap_index < public_pages) {
+		if (page_meta[2*swap_index] == running_thread->id && page_meta[2*swap_index+1] == index) {
+			break;
+		} else if (page_meta[2*swap_index] < 0 && running_thread->num_pages < index) {
+			running_thread->num_pages++;
 			break;
 		}
 	}
 
-	/*
-	 * does a similar thing to the previous block in that it finds the
-	 * metadata associated with the page the thread wanted to access
-	 * by iterating through page_data
-	 */
-	for(i = 0; i < NUM_PAGES; i++) {
-                if(page_data[i].page == right_page) {
-                        swapin = i;
-                        break;
-                }
-        }
-	
-	/*
-	 * this block of code swaps the page in memory
-	 * the location of the metadata does change
-	 * but the value of the pointer that references
-	 * the page in memory is updated to reflect the swap
-	 */
-	mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);	 // unlock wrong page
-        char temp_page[PAGE_SIZE];					 // swap space
-        memcpy(temp_page, wrong_page, PAGE_SIZE);
-        memcpy(wrong_page, right_page, PAGE_SIZE); 
-        memcpy(right_page, temp_page, PAGE_SIZE);  
-        page_data[swapin].page = right_page;	// swap page links
-        page_data[swapout].page = wrong_page;
-	mprotect(right_page, PAGE_SIZE, PROT_NONE);
+	if (swap_index == public_pages) {
+		// out of space, go to swap file
+		fprintf(stderr, "ERROR: No more space\n");
+	}
 
-	return;
+        // address of page that the thread wanted to access within it's own page_list
+        void * right_page = public_mem + swap_index*PAGE_SIZE;
+
+
+        /*
+         * this block of code swaps the page in memory
+         * and updates the page metadata
+         */
+        mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);         // unlock wrong page
+	mprotect(right_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+        char temp_page[PAGE_SIZE];                                       // swap space
+        memcpy(temp_page, right_page, PAGE_SIZE);
+	page_meta[2*swap_index] = page_meta[2*index];
+	page_meta[2*swap_index + 1] = index;
+        memcpy(right_page, wrong_page, PAGE_SIZE);
+	page_meta[2*index] = running_thread->id;
+	page_meta[2*index + 1] = index;
+        memcpy(wrong_page, temp_page, PAGE_SIZE);
+        mprotect(right_page, PAGE_SIZE, PROT_NONE);
+
+        // resume timer
+        setitimer(ITIMER_VIRTUAL, cont, NULL);
+
+        return;
 }
 
-void page_malloc_init() {
-       
-	memory = memalign( getpagesize(), PAGE_SIZE*NUM_PAGES);		// allocates memory for paging
-	 
-	/*
-	 * this block sets up the signal handler
-	 * and allows it to access the address that
-	 * caused the segfault
-	 */
+
+int scheduler_init();
+
+void memory_init() {
+
+	if (!init) {
+		scheduler_init();
+	}
+
+        // pause the timer
+        setitimer(ITIMER_VIRTUAL, pause, cont);
+
+        memory = memalign( PAGE_SIZE, PAGE_SIZE*NUM_PAGES);         // allocates memory for paging
+
+	// set up the size and pointers to each section of memory
+
+	shared_lim = 4*PAGE_SIZE;							// 4 pages for shared allocations
+	public_lim = (3*(NUM_PAGES - 4*THREAD_LIM - 4)/4)*PAGE_SIZE;			// 3/4 of the remainning space - stacks for general thread use
+	public_pages = public_lim/PAGE_SIZE;
+	private_lim = ((NUM_PAGES - 4*THREAD_LIM - 4)/4)*PAGE_SIZE - 4*public_pages;	// the remaining 1/4 for metadata and the scheduler
+
+	page_meta = memory + STACK_SIZE*THREAD_LIM;
+	private_mem = page_meta + 4*public_pages;
+	public_mem = private_mem + private_lim;
+	shared_mem = public_mem + public_lim;
+
+	// initialize metadata
+
+	int i;
+	for (i = 0; i < 2*public_pages; i++) {
+		((short *)page_meta)[i] = -1;
+	}
+
+	size(private_mem) = private_lim - 6;
+	allocd(private_mem) = 0;
+
+	size(public_mem) = public_lim - 6;
+	allocd(public_mem) = 0;
+
+	size(shared_mem) = shared_lim - 6;
+	allocd(shared_mem) = 0;
+
+	// set all memory to protected
+
+	void * ptr = public_mem;
+	for (i = 0; i < public_pages; i++) {
+		mprotect((ptr + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
+	}
+
+
+        /*
+         * this block sets up the signal handler
+         * and allows it to access the address that
+         * caused the segfault
+         */
         act.sa_sigaction = vmem_sig_handler;
         act.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &act, NULL);
 
-	/*
-         * this block initializes the structs that
-	 * hold the metadata for the paged memory 
-         */
-        int i;
-        for(i = 0; i < NUM_PAGES; i++) {
-                page_data[i].page = (void*)memory + i*PAGE_SIZE;
-                page_data[i].next = NULL;
-                page_data[i].prev = NULL;
-                page_data[i].more = 0;
-		page_data[i].free = 1;
-                page_data[i].TID = -1;
-        }
+        // resume timer
+        setitimer(ITIMER_VIRTUAL, cont, NULL);
+
 }
 
-void * page_malloc(size_t size, char * file, int line, int request) {
 
-        int pages_needed, pages_remaining, i, pos;
-        void* ret = NULL;
+void * myallocate(size_t size, char * file, int line, int flag, short TID) {
 
-	// determine number of pages needed to fulfill request (at least 1)
-	if(size % PAGE_SIZE == 0) {
-                pages_needed = size/PAGE_SIZE;
-        } else {
-                pages_needed = (int)(size/PAGE_SIZE) + 1;
-        }
+	void * mem;
+	int mem_lim;
+	static short firstmalloc = 1;
 
-	/*
-	 * this block of code searched the page metadata
-	 * and adds free pages to a list trying to fulfill
-	 * the request. If not enough free pages can be found,
-	 * errno is set and NULL is returned
-	 */
-	int free_pages[pages_needed];  			// list of free pages that will possibly be used for allocation
-        pos = 0;
-	pages_remaining = pages_needed; 		// find free pages, and add them to a list
-        for(i = 0; i < NUM_PAGES; i++) {
-                if(page_data[i].free)   {
-                        free_pages[pos] = i;
-                        pos++;
-                        pages_remaining--;
-                        if(pages_remaining == 0) {
-                                break;
+	// check if this is the first allocation of memory and set up initial metadata
+	if (firstmalloc) {
+		memory_init();
+		firstmalloc = 0;
+    
+	}
+
+	switch (flag) {
+		case STACK_ALLOCATION : 
+			if (TID >= 0 && TID < THREAD_LIM) {
+				return memory + TID*STACK_SIZE;
+			} else {
+				fprintf(stderr, "ERROR: Thread limit reached\n\tFile: %s\n\tLine: %d\n", file, line);
+				return NULL;
+			}
+		
+		case PRIVATE_REQ :
+			mem = private_mem;
+			mem_lim = private_lim;
+			break;
+
+		case PUBLIC_REQ :
+			mem = public_mem;
+			mem_lim = public_lim;
+			break;
+
+		case SHARED_REQ :
+			mem = shared_mem;
+			mem_lim = shared_lim;
+			break;
+	}
+
+	// check if size is larger than total mem - metadata 
+	if (size > mem_lim - 6) {
+		fprintf(stderr, "ERROR: Not Enough Memmory\n\tFile: %s\n\tLine: %d\n", file, line);
+		return NULL;
+	}
+  
+	// go through the "linked list" of blocks until we find an available block big enough, if we hit the end,
+	// return NULL and report the lack of space
+	void * ptr = mem;
+	while (ptr < (void*)(mem + mem_lim)) {
+		// a block must be either exactly the right size or have enough extra space to accomodate the 
+		// metadata for the free block containing the leftover space 
+		if (!allocd(ptr) && (size(ptr) == size || size(ptr) >= size + 6)) {
+			break;
+		}
+		ptr += size(ptr) + 6;
+	}
+
+	if (ptr >= (void*)(mem + mem_lim)) {
+		fprintf(stderr, "ERROR: Not Enough Memory\n\tFile: %s\n\tLine: %d\n", file, line);
+    		return NULL;
+  	}
+
+  	// if a suitable block is found and there is leftover space, divide it into an allocated and free block, 
+ 	// otherwise, simply mark the block as allocated, then return a pointer to the allocated block
+  	if (size(ptr) > size) {
+    		int leftover = size(ptr) - size - 6;
+    		size(ptr) = size;
+
+    		size(ptr + size + 6) = leftover;
+   		allocd(ptr + size + 6) = 0;
+  	}
+
+  	allocd(ptr) = 1;
+
+  	return ptr + 6;
+}
+
+
+void mydeallocate(void * index, char * file, int line, int flag, short TID) {
+
+	void * mem;
+	int mem_lim;
+
+        switch (flag) {
+                case STACK_ALLOCATION :
+                        if (TID >= 0 && TID < THREAD_LIM && !((index - memory)%PAGE_SIZE)) {
+                                return;
+                        } else {
+                                fprintf(stderr, "ERROR: Invalid free\n\tFile: %s\n\tLine: %d\n", file, line);
+                                return;
                         }
-                }
-        }
-	if(pages_remaining != 0) {	 		// reached end of the list and pages still needed -> insufficient memory
-                errno = ENOMEM;
-                return NULL;
-        }
 
-	/*
-	 * this loop takes the free pages searched in the
-	 * last block and links them together with forward
-	 * and backward links. It also marks them as allocated
-	 * and as a continuous allocation if more than one 
-	 * page was needed.
-	 */
-	for(i = 0; i < pages_needed; i++) {
-                page_data[ free_pages[i] ].free = 0;
-		page_data[ free_pages[i] ].TID = running_thread->id;
-		if(i == pages_needed - 1) {				//indicate continuous allocation
-			page_data[ free_pages[i] ].more = 0;
-		} else {
-			page_data[ free_pages[i] ].more = 1;
-		} 
-		if(i == pages_needed - 1) {				// foreward links
-			page_data[ free_pages[i] ].next = NULL;
-                } else {
-                        page_data[ free_pages[i] ].next = &page_data[ free_pages[i+1] ];
-                }
-		if(i == 0) { 						// backward lnks
-			page_data[ free_pages[i] ].prev = NULL;
-                } else {
-                        page_data[ free_pages[i] ].prev = &page_data[ free_pages[i-1] ];
-                }
+                case PRIVATE_REQ :
+                        mem = private_mem;
+                        mem_lim = private_lim;
+                        break;
 
+                case PUBLIC_REQ :
+                        mem = public_mem;
+                        mem_lim = public_lim;
+                        break;
+
+                case SHARED_REQ :
+                        mem = shared_mem;
+                        mem_lim = shared_lim;
+                        break;
         }
 
-	/*
-	 * this block appends the list assembled
-	 * in the last block to the end of the page_list
-	 * associated with the calling thread
-	 */
-	page_meta_t* ptr = running_thread->page_list;
-	if(ptr == NULL)	{ //list empty
-		running_thread->page_list = &page_data[ free_pages[0] ];
-	} else {	//list non-empty
-		while(ptr->next != NULL) {
-			ptr = ptr->next;
-		}
-		ptr->next = &page_data[ free_pages[0] ];
-		page_data[ free_pages[0] ].prev = ptr;
-	}
+  	//check if the given index is a valid pointer
+  	if (index < (void*)mem || (void*)(mem + mem_lim) <= index) {
+    		fprintf(stderr, "ERROR: Can only free a valid pointer\n\tFile: %s\n\t%d\n", file, line);
+    		return;
+  	}
 
-	/*
-	 * these lines return an address continuous with previous allocations for this thread
-	 * and update the number of pages that have been allocated to the calling thread
-	 */
-	ret = (void*)((intptr_t)memory + (intptr_t)running_thread->num_pages*PAGE_SIZE + 1);	//get next continuous address
-	running_thread->num_pages += pages_needed;						//update memory usage
+  	// check our list of blocks for the given index
+  	void * ptr = mem;
+  	if (ptr + 6 == index) {
+    		// free and merge if the pointer is at the begining of the list
+    		if (!allocd(ptr + size(ptr) + 6)) {
+      			size(ptr) += size(ptr + size(ptr) + 6) + 6;
+    		}
+    		allocd(ptr) = 0;
+    		return;
+  	}
 
-        return  ret;
+  	void * prev = ptr;
+  	ptr += size(ptr) + 6;
+
+  	while(ptr < (void*)(mem + mem_lim)) {
+    		if (ptr + 6 == index && allocd(ptr)) {
+      			break; 
+    		}
+    		prev = ptr;
+    		ptr += size(ptr) + 6;
+  	}
+
+  	// report if the pointer is not an allocated block
+  	if (ptr >= (void*)(mem + mem_lim)) {
+    		fprintf(stderr, "ERROR: Pointer is not allocated \n\tFile: %s\n\tLine: %d\n", file, line);
+    		return;
+  	}
+
+  	// if we find the block, mark it free and combine with adjacent free blocks
+  	if (ptr + size(ptr) + 8 < (void*)mem + mem_lim && !allocd(ptr + size(ptr) + 6)) {
+    		// merge with next block if its free
+    		size(ptr) += size(ptr + size(ptr) + 6) + 6;
+  	}
+
+  	allocd(ptr) = 0;
+
+  	if (!allocd(prev)) {
+    		// merge with previous block if its free
+    		size(prev) += size(ptr) + 6;
+  	}
+
 }
 
-void page_free(void * index, char * file, int line, int request) {
 
-	/*
-	 * this block finds the allocation within the thread's
-	 * page_list. If the address cannot be found errno is set
-	 * and the function returns
-	 */	
-	page_meta_t* ptr = running_thread->page_list;
-	while(ptr != NULL) {			 // find the beginning of the allocation
-		if(ptr->page == index) {
-			break;
-		}
-		ptr = ptr->next;
-	}
-	if(ptr == NULL) {	// invalid address
-		errno = EINVAL;
-		return;
-	}
 
-	/*
-	 * this block uses the "more" flag to 
-	 * find the continuous section of pages
-	 * that must be removed from the calling thread's
-	 * page_list and marked as free
-	 */
-	page_meta_t* cut1 = ptr->prev; 	// node that will be spliced with other end of the free'ed allocation
-	while(ptr->more != 0) {		// find end of the allocation
-		ptr = ptr->next;
-	}
-	page_meta_t* cut2 = ptr->next; 	// node that will be spliced with before the beginning of the free'd allocation
 
-	/*
-	 * this block frees the pages that were removed from the 
-	 * callling thread's page_list in the previous block
-	 * and resets them to the free state
-	 * the number of pages allocated to the calling thread
-	 * is updated
-	 */
-	int free_pages = 0;	
-	ptr = cut1->next;
-	while(ptr != NULL) {
-		if(ptr == cut2) {
-			break;
-		} else {
-			ptr->free = 1;
-			free_pages++;
-			ptr = ptr->next;
-		}
-	}
-	cut1->next = cut2;
-	cut2->prev = cut1;
-	running_thread->num_pages -= free_pages;	
 
-	return;
-}
 
 // _________________ Utility Functions _____________________
 
 // Function to initialize a Queue
 Queue * make_queue() {
-	Queue * new = malloc(sizeof(Queue));
+	Queue * new = myallocate(sizeof(Queue), __FILE__, __LINE__, PRIVATE_REQ, -1);
 	if(new == NULL) {
 		return 0;
 	}
@@ -300,7 +373,7 @@ my_pthread_t * get_next(Queue * Q) {
 		return NULL;
 	} else if (Q->size == 1) {
 		ret = Q->back->thread;
-		free(Q->back);
+		mydeallocate(Q->back, __FILE__, __LINE__, PRIVATE_REQ, -1);
 		Q->back = NULL;
 	} else {
 		ret = Q->back->next->thread;
@@ -310,7 +383,7 @@ my_pthread_t * get_next(Queue * Q) {
 		} else {
 			Q->back->next = Q->back->next->next;
 		}
-		free(temp);
+		mydeallocate(temp, __FILE__, __LINE__, PRIVATE_REQ, -1);
 	}
 
 	Q->size--;
@@ -320,7 +393,7 @@ my_pthread_t * get_next(Queue * Q) {
 
 // function to add a context to the Queue
 void enqueue(my_pthread_t * thread, Queue * Q) {
-	Node * new = malloc(sizeof(Node));
+	Node * new = myallocate(sizeof(Node), __FILE__, __LINE__, PRIVATE_REQ, -1);
 	new->thread = thread;
 	if (Q->size) {
 		new->next = Q->back->next;
@@ -334,9 +407,9 @@ void enqueue(my_pthread_t * thread, Queue * Q) {
 
 
 // Function to assign thread_id
-int get_ID() {
+short get_ID() {
 
-	int tid;
+	short tid;
 	tid_node_t * ptr;	
 
 	if (tid_list == NULL) {			//if the list is empty, issue a new ID
@@ -346,7 +419,7 @@ int get_ID() {
 		ptr = tid_list;
 		tid_list = tid_list->next;
 		tid = ptr->tid;
-		free(ptr);	
+		mydeallocate(ptr, __FILE__, __LINE__, PRIVATE_REQ, -1);	
 	}
 
 	if (tid >= THREAD_LIM)			// exceeded max 
@@ -360,7 +433,7 @@ int get_ID() {
 void free_ID(int thread_id) {
 	
 	// create new node to hold available id, place at the front of the list
-	tid_node_t * ptr = malloc(sizeof(tid_node_t));	
+	tid_node_t * ptr = myallocate(sizeof(tid_node_t), __FILE__, __LINE__, PRIVATE_REQ, -1);	
 	ptr->tid = thread_id;
 	ptr->next = tid_list;
 	tid_list = ptr;
@@ -372,8 +445,7 @@ void scheduler_alarm_handler(int signum);
 // Function to initialize the scheduler
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
-	page_malloc_init();
-
+	init = 1;
 	thread_count = 1;		//generates the first TID which will be 1
 	tid_list = NULL;		//list starts empty	
 	
@@ -400,7 +472,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	 * this block of code will end at the next           *
 	 * block of comments		                     *
 	 *****************************************************/
-	running_thread = malloc(sizeof(my_pthread_t));		//malloc a block of memory for the currently running thread
+	running_thread = myallocate(sizeof(my_pthread_t), __FILE__, __LINE__, PRIVATE_REQ, -1);		//malloc a block of memory for the currently running thread
 
 	if(getcontext(&main_context) == -1) {			//initializes main_context 
                 return -1;
@@ -425,21 +497,20 @@ int scheduler_init() {  		// should we return something? int to signal success/e
  	* (sets the scheduler to go off every 25 milliseconds *
  	* This block of code ends at the next block comment   *
  	*****************************************************/
-	pause = malloc(sizeof(struct itimerval));		//sets aside memory for the pause timer
+	pause = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//sets aside memory for the pause timer
 	pause->it_value.tv_sec = 0;				//seconds are not used here
 	pause->it_value.tv_usec = 0;				//this is a pause timer so the timer should no time should be run
 	pause->it_interval.tv_sec = 0;				//seconds are not used here
 	pause->it_interval.tv_usec = 0;				//this is a pause timer so the interval should be 0
-	timer = malloc(sizeof(struct itimerval));		//set aside memory for the timer
+	timer = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memory for the timer
 	timer->it_value.tv_sec = 0;				//seconds are not used here
 	timer->it_value.tv_usec = 25;				//the initial time should be 25 microseconds
 	timer->it_interval.tv_sec = 0;				//seconds are not used here
 	timer->it_interval.tv_usec = 25;			//at the experiation of the time the value should be reset to 25 microseconds
-	cont = malloc(sizeof(struct itimerval));		//set aside memoory for he cont timer where the current time will be set at a future point
+	cont = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memoory for he cont timer where the current time will be set at a future point
 	setitimer(ITIMER_VIRTUAL, timer, NULL);			//start the timer
 
 	// activate the scheduler
-	init = 1;
 	signal(SIGVTALRM, scheduler_alarm_handler);
 
 	return 0;
@@ -496,26 +567,22 @@ void scheduler_alarm_handler(int signum) {
 	// select new thread to run and set it as the running thread then swap to the new context
 	my_pthread_t * prev_thread = running_thread;
 	running_thread = get_next(priority_level[current_priority]);
-	
-	// mprotect all of prev_thread's memory
-	page_meta_t* ptr = prev_thread->page_list;
-	while(ptr != NULL) {
-		mprotect(ptr->page, PAGE_SIZE, PROT_NONE);
-		ptr = ptr->next;
-	}	
 
-	// unlock all of running_thread's memory	
-	if(running_thread != NULL) {
-		ptr = running_thread->page_list;
-		while(ptr != NULL) {
-			mprotect(ptr->page, PAGE_SIZE, PROT_READ | PROT_WRITE);
-			ptr = ptr->next;	
+        while (!running_thread) {
+                current_priority = (current_priority + 1)%NUM_PRIORITY;
+                running_thread = get_next(priority_level[current_priority]);
+        }
+
+	// mprotect all of prev_thread's memory and unprotect running_thread's memory
+	int i;
+	for (i = 0; i < public_pages; i++) {
+		if (page_meta[2*i + 1] == i) {
+			if (page_meta[2*i] == prev_thread->id) {
+				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
+			} else if (page_meta[2*i] == running_thread->id) {
+				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
+			}
 		}
-	}
-
-	while (!running_thread) {
-		current_priority = (current_priority + 1)%NUM_PRIORITY;
-		running_thread = get_next(priority_level[current_priority]);
 	}
 
 	// reset the timer
@@ -553,7 +620,8 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 		return -1;
 	}
 
-	ucp->uc_stack.ss_sp = malloc(STACK_SIZE);	//stack lives on the heap... is this right? I belive so EF
+	thread->id = get_ID();
+	ucp->uc_stack.ss_sp = myallocate(STACK_SIZE, __FILE__, __LINE__, STACK_ALLOCATION, thread->id);
 	
 	if(ucp->uc_stack.ss_sp == NULL) { //malloc() failed to get get necessary resources, set errno and return
 		setitimer(ITIMER_VIRTUAL, cont, NULL);
@@ -565,7 +633,6 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 
 	makecontext(ucp, (void (*)(void))function, 1, arg);	// thread->argc ? Francisco confirmed argc is always 1
 
-	thread->id = get_ID();		// how are we assigning IDs? In sequence starting at 1
 	thread->wait_id = -1;		// not waiting on a thread
 	thread->priority = 0;
 	thread->intervals_run = 0;
@@ -577,7 +644,6 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	thread->status = active;
 
 	thread->num_pages = 0;
-	thread->page_list = NULL;
 	
 	// resume timer
 	setitimer(ITIMER_VIRTUAL, cont, NULL);
@@ -654,7 +720,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 
 	// clean up the finished thread
 	waiting[thread.id] = NULL;
-	free(thread_table[thread.id]->uc.uc_stack.ss_sp);
+	mydeallocate(thread_table[thread.id]->uc.uc_stack.ss_sp, __FILE__, __LINE__, STACK_ALLOCATION, thread.id);
 	thread_table[thread.id] = NULL;
 	free_ID(thread.id);
 
@@ -797,7 +863,7 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 		temp->status = active;
 		enqueue(temp, priority_level[temp->priority]);
 	}
-	free(mutex->waiting);
+	mydeallocate(mutex->waiting, __FILE__, __LINE__, PRIVATE_REQ, -1);
 	mutex->user = NULL;
 
 	// resume timer and return

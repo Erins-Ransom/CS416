@@ -4,9 +4,9 @@
 
 void * foo(void* arg)
 {
-	void* ptr1 = page_malloc(8192, __FILE__, __LINE__, 1);
-	sprintf( (char*)(ptr1+2000), "yay threads\n");
-	printf("%s", (char*)(ptr1+2000));
+	char * ptr1 = malloc(12);
+	sprintf( ptr1 , "yay threads\n");
+	printf("%s", ptr1);
 
 	pthread_exit(NULL);
 }
@@ -14,7 +14,7 @@ void * foo(void* arg)
 
 int main(int argc, char** argv)
 {
-	int x = 3, i = 0;
+	int x = 20, i = 0;
 	my_pthread_t threads[x];
 	for (i = 0; i < x; i++) {
 		my_pthread_create(&threads[i], NULL, &foo, NULL);
