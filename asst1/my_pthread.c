@@ -79,7 +79,11 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 		page_meta[2*index] = running_thread->id;
 		page_meta[2*index + 1] = index;
 		running_thread->num_pages++;
-		mprotect(wrong_page, PAGE_SIZE, PROT_NONE);
+		mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+
+        	// resume timer
+	        setitimer(ITIMER_VIRTUAL, cont, NULL);
+
 		return;
 	}
 
@@ -87,10 +91,11 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	while (swap_index < public_pages) {
 		if (page_meta[2*swap_index] == running_thread->id && page_meta[2*swap_index+1] == index) {
 			break;
-		} else if (page_meta[2*swap_index] < 0 && running_thread->num_pages < index) {
+		} else if (page_meta[2*swap_index] < 0 && running_thread->num_pages < swap_index) {
 			running_thread->num_pages++;
 			break;
 		}
+		swap_index++;
 	}
 
 	if (swap_index == public_pages) {
@@ -108,6 +113,10 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
          */
         mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);         // unlock wrong page
 	mprotect(right_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+	if (page_meta[2*swap_index] < 0 && index == 0) {
+		size(right_page) = public_lim -6;
+		allocd(right_page) = 0;
+	}
         char temp_page[PAGE_SIZE];                                       // swap space
         memcpy(temp_page, right_page, PAGE_SIZE);
 	page_meta[2*swap_index] = page_meta[2*index];
@@ -143,10 +152,10 @@ void memory_init() {
 	shared_lim = 4*PAGE_SIZE;							// 4 pages for shared allocations
 	public_lim = (3*(NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE;			// 3/4 of the remainning space - stacks for general thread use
 	public_pages = public_lim/PAGE_SIZE;
-	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - 4*public_pages;	// the remaining 1/4 for metadata and the scheduler
+	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
 
 	page_meta = memory + STACK_SIZE*THREAD_LIM;
-	private_mem = page_meta + 4*public_pages;
+	private_mem = page_meta + (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
 	shared_mem = public_mem + public_lim;
 
@@ -170,7 +179,7 @@ void memory_init() {
 
 	void * ptr = public_mem;
 	for (i = 0; i < public_pages; i++) {
-		mprotect((ptr + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
+		mprotect((ptr + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
 	}
 
 
@@ -578,9 +587,9 @@ void scheduler_alarm_handler(int signum) {
 	for (i = 0; i < public_pages; i++) {
 		if (page_meta[2*i + 1] == i) {
 			if (page_meta[2*i] == prev_thread->id) {
-				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
-			} else if (page_meta[2*i] == running_thread->id) {
 				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
+			} else if (page_meta[2*i] == running_thread->id) {
+				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
 			}
 		}
 	}

@@ -134,16 +134,8 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 }
 
 
-int scheduler_init();
 
 void memory_init() {
-
-	if (!init) {
-		scheduler_init();
-	}
-
-        // pause the timer
-        setitimer(ITIMER_VIRTUAL, pause, cont);
 
         memory = memalign( PAGE_SIZE, PAGE_SIZE*NUM_PAGES);         // allocates memory for paging
 
@@ -192,22 +184,19 @@ void memory_init() {
         act.sa_flags = SA_SIGINFO;
         sigaction(SIGSEGV, &act, NULL);
 
-        // resume timer
-        setitimer(ITIMER_VIRTUAL, cont, NULL);
-
 }
 
+
+int scheduler_init();
 
 void * myallocate(size_t size, char * file, int line, int flag, short TID) {
 
 	void * mem;
 	int mem_lim;
-	static short firstmalloc = 1;
 
 	// check if this is the first allocation of memory and set up initial metadata
-	if (firstmalloc) {
-		memory_init();
-		firstmalloc = 0;
+	if (!init) {
+		scheduler_init();
     
 	}
 
@@ -455,6 +444,7 @@ void scheduler_alarm_handler(int signum);
 int scheduler_init() {  		// should we return something? int to signal success/error? 
 
 	init = 1;
+	memory_init();
 	thread_count = 1;		//generates the first TID which will be 1
 	tid_list = NULL;		//list starts empty	
 	
