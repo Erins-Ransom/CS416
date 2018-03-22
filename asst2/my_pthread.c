@@ -557,7 +557,7 @@ void scheduler_alarm_handler(int signum) {
 	}
 
 	// update the priority counters
-	if (run_at_priority++ < NUM_PRIORITY - current_priority) {
+	if (run_at_priority++ > NUM_PRIORITY - current_priority) {
 		current_priority = (current_priority + 1)%NUM_PRIORITY;
 		run_at_priority = 0;
 	}
@@ -578,7 +578,8 @@ void scheduler_alarm_handler(int signum) {
 		if (page_meta[2*i + 1] == i) {
 			if (page_meta[2*i] == prev_thread->id) {
 				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
-			} else if (page_meta[2*i] == running_thread->id) {
+			}
+			if (page_meta[2*i] == running_thread->id) {
 				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
 			}
 		}
