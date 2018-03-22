@@ -7,10 +7,15 @@
 #define _GNU_SOURCE
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <malloc.h>
 #include <ucontext.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <errno.h>
+#include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
 
 #define USE_MY_PTHREAD 1;
 
@@ -25,32 +30,43 @@
 #define pthread_mutex_destroy my_pthread_mutex_destroy
 #endif
 
+
+#define STACK_ALLOCATION 0
+#define PRIVATE_REQ 1
+#define PUBLIC_REQ 2
+#define SHARED_REQ 3
+#define malloc(x) myallocate(x, __FILE__, __LINE__, PUBLIC_REQ, -1);
+#define free(x) mydeallocate(x, __FILE__, __LINE__, PUBLIC_REQ, -1);
+#define shalloc(x) myallocate(x, __FILE__, __LINE__, SHARED_REQ, -1);
+
+
 // ____________________ Struct Defs ________________________
 
 enum thread_status {active, yield, wait_thread, wait_mutex, thread_exit};
 
 typedef struct my_pthread {
-        int id;                  	//integer identifier of thread
+        short id;                  	// integer identifier of thread
         int priority;                   // current priority level of this thread
         int intervals_run;              // the number of concecutive intervals this thread has run
         int wait_id;			// TID of thread being waited on
 	enum thread_status status;      // the threads current status
-	void* ret;                      //return value of the thread
-        ucontext_t uc;                  //execution context of given thread
+	void* ret;                      // return value of the thread
+        ucontext_t uc;                  // execution context of given thread
+	int num_pages;			// number of pages owned by thread
 } my_pthread_t;
 
 typedef struct tid_node {
-        int tid;
+        short tid;
         struct tid_node* next;
 } tid_node_t;
 
 typedef struct Node {
-        my_pthread_t * thread;
-        struct Node * next;
+        my_pthread_t* thread;
+        struct Node* next;
 } Node;
 
 typedef struct Queue {
-        Node * back;
+        Node* back;
         int size;
 } Queue;
 
@@ -93,5 +109,16 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex);
 // Destroys a given mutex. Mutex should be unlocked before doing so.
 int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex);
 
+// Swaps pages on page fault
+void vmem_sig_handler(int signo, siginfo_t *info, void *context);
+
+// Initialized memory for paging
+void page_malloc_init();
+
+
+void * myallocate(size_t size, char * file, int line, int flag, short TID);
+
+
+void mydeallocate(void * index, char * file, int line, int flag, short TID);
 
 #endif

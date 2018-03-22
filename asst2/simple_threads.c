@@ -14,7 +14,7 @@ void * foo(void* arg)
 
 int main(int argc, char** argv)
 {
-	int x = 20, i = 0;
+	int x = 30, i = 0;
 	my_pthread_t threads[x];
 	for (i = 0; i < x; i++) {
 		my_pthread_create(&threads[i], NULL, &foo, NULL);
