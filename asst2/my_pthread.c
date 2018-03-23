@@ -175,7 +175,7 @@ void memory_init() {
 	shared_lim = 4*PAGE_SIZE;							// 4 pages for shared allocations
 	public_lim = (3*(NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE;			// 3/4 of the remainning space - stacks for general thread use
 	public_pages = public_lim/PAGE_SIZE;
-	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
+	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
 	page_meta = memory + STACK_SIZE*THREAD_LIM;
 	private_mem = page_meta + (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
