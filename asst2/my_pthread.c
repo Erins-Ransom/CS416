@@ -8,7 +8,6 @@
 
 #define PAGE_SIZE 4096
 #define NUM_PAGES 2000
-#define SWP_SIZE 12582912
 #define STACK_SIZE (16*PAGE_SIZE)	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
@@ -25,12 +24,12 @@
 static void * memory;				// simulated main memory
 static short * page_meta;			// pointer to the page metadata in memeory
 static void * private_mem;			// pointer to the area of memory reserved for the scheduler
-static int private_lim;
+static int private_lim;				// pointer to end of private memory
 static void * public_mem;			// pointer to the area of memory for gerneral thread use
-static int public_lim;
-static int public_pages;
+static int public_lim;				// pointer to end of public memory
+static int public_pages;			// total number of pages in public memory (also the limit on the maximum number of pages one thread can have)
 static void * shared_mem;			// pointer to the area of memory for shared use
-static int shared_lim;
+static int shared_lim;				// pointer to end of shared memory
 static ucontext_t main_context;			// execution context for main 
 static Queue * priority_level[NUM_PRIORITY]; 	// array of pointers to queues associated with static priority levels
 static Queue * death_row;			// queue for threads waiting to die
@@ -47,10 +46,11 @@ static my_pthread_t * thread_table[THREAD_LIM];	// references to all current thr
 static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
 static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
 static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
-static struct sigaction act;
+static struct sigaction act;			// struct for sigaction call
 static int swpfd;				// file descriptor for swapfile
 static void* swp_ptr;				// pointer to beginning of swapfile mapping
-
+static short* swp_page_meta;			// pointer to the metadata of pages stored in the swapfile
+static void* swp_pages;				// pointer to the pags stored in the swapfile
 
 // _________________ Memory Management ____________________
 
@@ -113,18 +113,24 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 		swap_index++;
 	}
 
+	void* right_page = NULL;
 	if (swap_index == public_pages) {
 		/*
  		 * search the swapfile for the page
  		 * if you don't find the page in the swapfile then evict and allocate a new one
  		 * (you should evict the page that running_thread tried to access in the first place)
   		 */
+	
+		
+
+
+
 		fprintf(stderr, "ERROR: No more space\n");
 		exit(EXIT_FAILURE);
+	} else {
+        	// address of page that the thread wanted to access within it's own page_list
+        	right_page = public_mem + swap_index*PAGE_SIZE;
 	}
-
-        // address of page that the thread wanted to access within it's own page_list
-        void * right_page = public_mem + swap_index*PAGE_SIZE;
 
 
         /*
@@ -144,7 +150,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
         memcpy(temp_page, right_page, PAGE_SIZE);			 // load right_page into swap space
 		
 	// copy out the metadata of the page running_thread attempted to access (unsuccessfully) 
-	page_meta[2*swap_index] = page_meta[2*index]; // TID
+	page_meta[2*swap_index] = page_meta[2*index]; 	// TID
 	page_meta[2*swap_index + 1] = index;		// location in memory
 
 
@@ -199,7 +205,6 @@ void memory_init() {
 	allocd(shared_mem) = 0;
 
 	// set all memory to protected
-
 	void * ptr = public_mem;
 	for (i = 0; i < public_pages; i++) {
 		mprotect((ptr + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
@@ -210,15 +215,27 @@ void memory_init() {
  	 * this block of code sets 
  	 * up the swapfile and maps
  	 * it to a virtual address space
- 	 * adjacent to public page memory
  	 */
-	swpfd = open(".my_pthread.swp", O_CREAT);               		// opens swapfile
-	void* start_addr = (void*)((intptr_t)public_mem + public_lim + 1);	// address adjacent to public memory
-	swp_ptr = mmap(start_addr, SWP_SIZE, PROT_NONE, MAP_PRIVATE, swpfd, 0);	// maps swapfile to virtual address space
-	if(swp_ptr < 0) {
-		perror("Could not map swapfile:");
+	size_t swp_size = public_pages*THREAD_LIM*(PAGE_SIZE + 4);				// space for pages and metadata
+	swpfd = open("my_pthread.swp", O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);               		// opens swapfile
+	if(swpfd < 0) {
+		perror("Could not open swapfile");
+		exit(EXIT_FAILURE);
+	}	
+	if( ftruncate(swpfd, swp_size) < 0 )  {							// allocate swapfile	
+	 perror("Could not allocate swapfile");
+                exit(EXIT_FAILURE);
+	}
+	swp_ptr = mmap(NULL, swp_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, swpfd, 0);		// maps swapfile to virtual address space
+	if((intptr_t)swp_ptr <= 0) {
+		perror("Could not map swapfile");
 		exit(EXIT_FAILURE);
 	}
+	swp_page_meta = (short*)swp_ptr;
+	swp_pages = swp_page_meta + public_pages*THREAD_LIM*4;
+        for (i = 0; i < 2*public_pages*THREAD_LIM; i++) {
+                swp_page_meta[i] = -1;	// initialize TIDs and indexes to -1
+        }
 
         /*
          * this block sets up the signal handler
