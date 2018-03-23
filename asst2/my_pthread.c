@@ -8,6 +8,7 @@
 
 #define PAGE_SIZE 4096
 #define NUM_PAGES 2000
+#define SWP_SIZE 12582912
 #define STACK_SIZE (16*PAGE_SIZE)	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
@@ -47,7 +48,8 @@ static my_pthread_t * waiting[THREAD_LIM];	// references to waiting threads
 static my_pthread_mutex_t * mutex_list[MUTEX_LIM]; // list of active mutexes
 static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finished
 static struct sigaction act;
-
+static int swpfd;				// file descriptor for swapfile
+static void* swp_ptr;				// pointer to beginning of swapfile mapping
 
 
 // _________________ Memory Management ____________________
@@ -74,8 +76,13 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
          */
         void * wrong_page = public_mem + index*PAGE_SIZE;        // address of page that the thread tried to access
 
-	// if the page has not been used yet, assign it to the current thread and unprotect it
-	if (page_meta[2*index] < 0) {
+	/*
+ 	 * if the page has not been used yet, assign 
+ 	 * it to the current thread and unprotect it 
+ 	 * pages are assigned ownership on access
+ 	 * (allocated but not swapped)
+	 */
+	if (page_meta[2*index] < 0) {	//checks TID
 		page_meta[2*index] = running_thread->id;
 		page_meta[2*index + 1] = index;
 		running_thread->num_pages++;
@@ -87,10 +94,18 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 		return;
 	}
 
-	int swap_index = 0;
+	/*
+ 	 * search for "physical" location of 
+ 	 * page the running_thread wants to access
+ 	 */
+	int swap_index = 0;			//location of page running_thread actually wants to access
 	while (swap_index < public_pages) {
+		
+		// thread owns page, and is correct in-order page
 		if (page_meta[2*swap_index] == running_thread->id && page_meta[2*swap_index+1] == index) {
 			break;
+	
+		// the page running_thread wanted to access is not claimed (allocated, but later swapped)
 		} else if (page_meta[2*swap_index] < 0 && running_thread->num_pages < swap_index) {
 			running_thread->num_pages++;
 			break;
@@ -99,8 +114,13 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	}
 
 	if (swap_index == public_pages) {
-		// out of space, go to swap file
+		/*
+ 		 * search the swapfile for the page
+ 		 * if you don't find the page in the swapfile then evict and allocate a new one
+ 		 * (you should evict the page that running_thread tried to access in the first place)
+  		 */
 		fprintf(stderr, "ERROR: No more space\n");
+		exit(EXIT_FAILURE);
 	}
 
         // address of page that the thread wanted to access within it's own page_list
@@ -112,19 +132,30 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
          * and updates the page metadata
          */
         mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);         // unlock wrong page
-	mprotect(right_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
+	mprotect(right_page, PAGE_SIZE, PROT_READ | PROT_WRITE);	 // unlock right page
+	
+	// special case: thread accesses the first page for the first time, causes malloc error from swapping in empty page
 	if (page_meta[2*swap_index] < 0 && index == 0) {
 		size(right_page) = public_lim -6;
 		allocd(right_page) = 0;
 	}
-        char temp_page[PAGE_SIZE];                                       // swap space
-        memcpy(temp_page, right_page, PAGE_SIZE);
-	page_meta[2*swap_index] = page_meta[2*index];
-	page_meta[2*swap_index + 1] = index;
-        memcpy(right_page, wrong_page, PAGE_SIZE);
+        
+	char temp_page[PAGE_SIZE];                                       // swap space
+        memcpy(temp_page, right_page, PAGE_SIZE);			 // load right_page into swap space
+		
+	// copy out the metadata of the page running_thread attempted to access (unsuccessfully) 
+	page_meta[2*swap_index] = page_meta[2*index]; // TID
+	page_meta[2*swap_index + 1] = index;		// location in memory
+
+
+        memcpy(right_page, wrong_page, PAGE_SIZE);	// load page you tried to access into original position of page you wanted to access
+	
+	// copy in metadata of page you wanted to access
 	page_meta[2*index] = running_thread->id;
 	page_meta[2*index + 1] = index;
-        memcpy(wrong_page, temp_page, PAGE_SIZE);
+       
+	// load page you wanted to access into the location you tried to access 
+	memcpy(wrong_page, temp_page, PAGE_SIZE);
         mprotect(right_page, PAGE_SIZE, PROT_NONE);
 
         // resume timer
@@ -139,23 +170,23 @@ void memory_init() {
 
         memory = memalign( PAGE_SIZE, PAGE_SIZE*NUM_PAGES);         // allocates memory for paging
 
-	// set up the size and pointers to each section of memory
-
+	/*
+ 	 * set up the size and pointers to each section of memory
+	 */
 	shared_lim = 4*PAGE_SIZE;							// 4 pages for shared allocations
 	public_lim = (3*(NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE;			// 3/4 of the remainning space - stacks for general thread use
 	public_pages = public_lim/PAGE_SIZE;
 	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
-
 	page_meta = memory + STACK_SIZE*THREAD_LIM;
 	private_mem = page_meta + (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
 	shared_mem = public_mem + public_lim;
 
-	// initialize metadata
 
+	// initialize metadata
 	int i;
 	for (i = 0; i < 2*public_pages; i++) {
-		((short *)page_meta)[i] = -1;
+		page_meta[i] = -1;
 	}
 
 	size(private_mem) = private_lim - 6;
@@ -174,6 +205,20 @@ void memory_init() {
 		mprotect((ptr + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
 	}
 
+
+	/*
+ 	 * this block of code sets 
+ 	 * up the swapfile and maps
+ 	 * it to a virtual address space
+ 	 * adjacent to public page memory
+ 	 */
+	swpfd = open(".my_pthread.swp", O_CREAT);               		// opens swapfile
+	void* start_addr = (void*)((intptr_t)public_mem + public_lim + 1);	// address adjacent to public memory
+	swp_ptr = mmap(start_addr, SWP_SIZE, PROT_NONE, MAP_PRIVATE, swpfd, 0);	// maps swapfile to virtual address space
+	if(swp_ptr < 0) {
+		perror("Could not map swapfile:");
+		exit(EXIT_FAILURE);
+	}
 
         /*
          * this block sets up the signal handler
@@ -314,6 +359,7 @@ void mydeallocate(void * index, char * file, int line, int flag, short TID) {
   	void * prev = ptr;
   	ptr += size(ptr) + 6;
 
+	// iterate through metadata to find address usr wants to free
   	while(ptr < (void*)(mem + mem_lim)) {
     		if (ptr + 6 == index && allocd(ptr)) {
       			break; 
@@ -572,7 +618,7 @@ void scheduler_alarm_handler(int signum) {
                 running_thread = get_next(priority_level[current_priority]);
         }
 
-	// mprotect all of prev_thread's memory and unprotect running_thread's memory
+	// mprotect all of prev_thread's memory and unprotect running_thread's memory (that are already in the correct location)
 	int i;
 	for (i = 0; i < public_pages; i++) {
 		if (page_meta[2*i + 1] == i) {
