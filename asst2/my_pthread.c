@@ -7,7 +7,7 @@
 // _________________ Macros _______________________________
 
 #define PAGE_SIZE 4096
-#define NUM_PAGES 2000
+#define NUM_PAGES 2048
 #define STACK_SIZE (16*PAGE_SIZE)	//default size of call stack, if this is too large, it will corrupt the heap and cause free()'s to segfault
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
@@ -49,8 +49,6 @@ static volatile sig_atomic_t done[THREAD_LIM];	// flag for if a thread has finis
 static struct sigaction act;			// struct for sigaction call
 static int swpfd;				// file descriptor for swapfile
 static void* swp_ptr;				// pointer to beginning of swapfile mapping
-static short* swp_page_meta;			// pointer to the metadata of pages stored in the swapfile
-static void* swp_pages;				// pointer to the pags stored in the swapfile
 
 // _________________ Memory Management ____________________
 
@@ -114,17 +112,12 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	}
 
 	void* right_page = NULL;
-	if (swap_index == public_pages) {
+	if (swap_index == public_pages) {	// swapfile case
 		/*
  		 * search the swapfile for the page
  		 * if you don't find the page in the swapfile then evict and allocate a new one
  		 * (you should evict the page that running_thread tried to access in the first place)
   		 */
-	
-		
-
-
-
 		fprintf(stderr, "ERROR: No more space\n");
 		exit(EXIT_FAILURE);
 	} else {
@@ -184,17 +177,18 @@ void memory_init() {
 	public_pages = public_lim/PAGE_SIZE;
 	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
 	page_meta = memory + STACK_SIZE*THREAD_LIM;
-	private_mem = page_meta + (4*public_pages/PAGE_SIZE + 1)*PAGE_SIZE;
+	private_mem = page_meta + (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
 	shared_mem = public_mem + public_lim;
 
 
-	// initialize metadata
+	// initialize page metadata
 	int i;
 	for (i = 0; i < 2*public_pages; i++) {
 		page_meta[i] = -1;
 	}
 
+	// initialize malloc metadata
 	size(private_mem) = private_lim - 6;
 	allocd(private_mem) = 0;
 
@@ -231,11 +225,6 @@ void memory_init() {
 		perror("Could not map swapfile");
 		exit(EXIT_FAILURE);
 	}
-	swp_page_meta = (short*)swp_ptr;
-	swp_pages = swp_page_meta + public_pages*THREAD_LIM*4;
-        for (i = 0; i < 2*public_pages*THREAD_LIM; i++) {
-                swp_page_meta[i] = -1;	// initialize TIDs and indexes to -1
-        }
 
         /*
          * this block sets up the signal handler
