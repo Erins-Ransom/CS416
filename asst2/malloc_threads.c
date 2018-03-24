@@ -41,7 +41,7 @@ void * foo(void* arg)
 	for (i=0; i<100; i++) {
 		more_numbers[i] = malloc((1 + rand()%100)*sizeof(int));
 		*more_numbers[i] = array[i];
-		delay(rand()%100);
+//		delay(10);
 		fprintf(stdout, "Fib# %d is %d\n", i, *more_numbers[i]);
 		fflush(stdout);
 	}
@@ -58,7 +58,7 @@ void * foo(void* arg)
 
 int main(int argc, char** argv)
 {
-	int x = 5, i = 0;
+	int x = 10, i = 0;
 	my_pthread_t threads[x];
 	for (i = 0; i < x; i++) {
 		my_pthread_create(&threads[i], NULL, &foo, NULL);

@@ -36,7 +36,7 @@ static Queue * death_row;			// queue for threads waiting to die
 static int current_priority;			// current piority level that is being run
 static int run_at_priority;			// threads run at the current priority
 static struct itimerval * timer;		// timer to periodically activate the scheduler
-static struct itimerval * pause;		// a zero itimerval used to pause the timer
+static struct itimerval * stop;			// a zero itimerval used to pause the timer
 static struct itimerval * cont;			// a place to store the current time
 static my_pthread_t * running_thread;		// reference to the currently running thread
 static short init;				// flag for if the scheduler has been initialized
@@ -56,7 +56,7 @@ static void* swp_ptr;				// pointer to beginning of swapfile mapping
 void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 
         // pause the timer
-        setitimer(ITIMER_VIRTUAL, pause, cont);
+        setitimer(ITIMER_VIRTUAL, stop, cont);
 
         /*
          * This value represents several things:
@@ -177,7 +177,7 @@ void memory_init() {
 	public_pages = public_lim/PAGE_SIZE;
 	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
 	page_meta = memory + STACK_SIZE*THREAD_LIM;
-	private_mem = page_meta + (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
+	private_mem = (void *)page_meta + (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
 	shared_mem = public_mem + public_lim;
 
@@ -548,11 +548,11 @@ int scheduler_init() {  		// should we return something? int to signal success/e
  	* (sets the scheduler to go off every 25 milliseconds *
  	* This block of code ends at the next block comment   *
  	*****************************************************/
-	pause = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//sets aside memory for the pause timer
-	pause->it_value.tv_sec = 0;				//seconds are not used here
-	pause->it_value.tv_usec = 0;				//this is a pause timer so the timer should no time should be run
-	pause->it_interval.tv_sec = 0;				//seconds are not used here
-	pause->it_interval.tv_usec = 0;				//this is a pause timer so the interval should be 0
+	stop = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//sets aside memory for the pause timer
+	stop->it_value.tv_sec = 0;				//seconds are not used here
+	stop->it_value.tv_usec = 0;				//this is a pause timer so the timer should no time should be run
+	stop->it_interval.tv_sec = 0;				//seconds are not used here
+	stop->it_interval.tv_usec = 0;				//this is a pause timer so the interval should be 0
 	timer = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memory for the timer
 	timer->it_value.tv_sec = 0;				//seconds are not used here
 	timer->it_value.tv_usec = 25;				//the initial time should be 25 microseconds
@@ -570,7 +570,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 //Signal handler to activate the scheduler on periodic SIGVTALRM, this is the body of the scheduler
 void scheduler_alarm_handler(int signum) {
 	// pause the timer
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// check status of currently running thread
 	switch (running_thread->status) {
@@ -663,7 +663,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	// pause the timer, this should be atomic
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	ucontext_t* ucp = &(thread->uc);
 
@@ -715,7 +715,7 @@ void my_pthread_yield() {
 // any return value from the thread will be saved.
 void pthread_exit(void *value_ptr) {
 	// pause the timer
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// set the address of the return value
 	running_thread->ret = value_ptr;
@@ -755,7 +755,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	// if the thread to be joined is not finished, wait on it
 	if (!done[thread.id]) {
 		//pause timer
-		setitimer(ITIMER_VIRTUAL, pause, cont);
+		setitimer(ITIMER_VIRTUAL, stop, cont);
 		running_thread->status = wait_thread;
 		running_thread->wait_id = thread.id;
 		waiting[thread.id] = running_thread; 
@@ -764,7 +764,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	}
 	
 	// pause timer
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// set the return value
 	if (value_ptr)
@@ -824,7 +824,7 @@ int my_pthread_mutex_init(my_pthread_mutex_t *mutex, const pthread_mutexattr_t *
 // Locks a given mutex, other threads attempting to access this mutex will not run until it is unlocked.
 int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	// pause timer, this opperation needs to be atomic
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// invalid value for mutex
 	if(mutex <= 0) {
@@ -859,7 +859,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 // Unlocks a given mutex.
 int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	// pause timer, this needs to be atomic
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// check that the given thread has the mutex
 	if (mutex->user != running_thread) {	
@@ -888,7 +888,7 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 
 
 	// pause timer, does this need to be atomic?
-	setitimer(ITIMER_VIRTUAL, pause, cont);
+	setitimer(ITIMER_VIRTUAL, stop, cont);
 
 	// remove mutex from active list, return error if mutex is still locked
 	int i;
