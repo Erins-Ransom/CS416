@@ -97,7 +97,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
  	 * page the running_thread wants to access
  	 */
 	int swap_index = 0;			//location of page running_thread actually wants to access
-	while (swap_index < public_pages) {
+	while (swap_index < public_pages*(1+THREAD_LIM) ) {
 		
 		// thread owns page, and is correct in-order page
 		if (page_meta[2*swap_index] == running_thread->id && page_meta[2*swap_index+1] == index) {
@@ -112,19 +112,18 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	}
 
 	void* right_page = NULL;
-	if (swap_index == public_pages) {	// swapfile case
-		/*
- 		 * search the swapfile for the page
- 		 * if you don't find the page in the swapfile then evict and allocate a new one
- 		 * (you should evict the page that running_thread tried to access in the first place)
-  		 */
-		fprintf(stderr, "ERROR: No more space\n");
-		exit(EXIT_FAILURE);
-	} else {
-        	// address of page that the thread wanted to access within it's own page_list
-        	right_page = public_mem + swap_index*PAGE_SIZE;
-	}
+	if (swap_index < public_pages) {			// page is in main memory
 
+		right_page = public_mem + swap_index*PAGE_SIZE;	// position of page in memory
+
+	} else if(swap_index < public_pages*(1+THREAD_LIM) ) {	// page is in swapfile
+
+		right_page = swp_ptr + (swap_index-public_pages)*PAGE_SIZE;	// position of page in swapfile
+
+	} else {						// no free pages
+		fprintf(stderr, "Error: out of memory\n");
+		exit(EXIT_FAILURE);
+	}
 
         /*
          * this block of code swaps the page in memory
@@ -182,9 +181,9 @@ void memory_init() {
 	shared_mem = public_mem + public_lim;
 
 
-	// initialize page metadata
+	// initialize page metadata for main memory and swapfile
 	int i;
-	for (i = 0; i < 2*public_pages; i++) {
+	for (i = 0; i < 2*public_pages*(1 + THREAD_LIM); i++) {
 		page_meta[i] = -1;
 	}
 
@@ -220,7 +219,7 @@ void memory_init() {
 	 perror("Could not allocate swapfile");
                 exit(EXIT_FAILURE);
 	}
-	swp_ptr = mmap(NULL, swp_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, swpfd, 0);		// maps swapfile to virtual address space
+	swp_ptr = mmap(NULL, swp_size, PROT_READ | PROT_WRITE, MAP_SHARED, swpfd, 0);		// maps swapfile to virtual address space
 	if((intptr_t)swp_ptr <= 0) {
 		perror("Could not map swapfile");
 		exit(EXIT_FAILURE);

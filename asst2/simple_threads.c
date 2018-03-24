@@ -2,12 +2,16 @@
 #include <stdlib.h>
 #include "my_pthread_t.h"
 
+#define ALLOC_SIZE 1024000
+
 void * foo(void* arg)
 {
-	char * ptr1 = malloc(12);
-	sprintf( ptr1 , "yay threads\n");
-	printf("%s", ptr1);
-
+	char * ptr = malloc(ALLOC_SIZE);
+	int i; 
+	for(i = 0; i < ALLOC_SIZE; i++) {
+		ptr[i] = 'd';
+	}
+	printf("yay threads\n");
 	pthread_exit(NULL);
 }
 
