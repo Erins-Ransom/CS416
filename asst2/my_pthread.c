@@ -22,7 +22,8 @@
 // ___________________ Globals ______________________________
 
 static void * memory;				// simulated main memory
-static short * page_meta;			// pointer to the page metadata in memeory
+static char * page_meta_id;			// pointer to the page metadata in memeory
+static int * page_meta_index;
 static void * private_mem;			// pointer to the area of memory reserved for the scheduler
 static int private_lim;				// pointer to end of private memory
 static void * public_mem;			// pointer to the area of memory for gerneral thread use
@@ -80,9 +81,9 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
  	 * pages are assigned ownership on access
  	 * (allocated but not swapped)
 	 */
-	if (page_meta[2*index] < 0) {	//checks TID
-		page_meta[2*index] = running_thread->id;
-		page_meta[2*index + 1] = index;
+	if (page_meta_id[index] < 0) {	//checks TID
+		page_meta_id[index] = running_thread->id;
+		page_meta_index[index] = index;
 		running_thread->num_pages++;
 		mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
 
@@ -96,19 +97,25 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
  	 * search for "physical" location of 
  	 * page the running_thread wants to access
  	 */
-	int swap_index = 0;			//location of page running_thread actually wants to access
+	int swap_index = 0, next_free = -1;			//location of page running_thread actually wants to access
 	while (swap_index < public_pages*(1+THREAD_LIM) ) {
 		
 		// thread owns page, and is correct in-order page
-		if (page_meta[2*swap_index] == running_thread->id && page_meta[2*swap_index+1] == index) {
+		if (page_meta_id[swap_index] == running_thread->id && page_meta_index[swap_index] == index) {
 			break;
 	
-		// the page running_thread wanted to access is not claimed (allocated, but later swapped)
-		} else if (page_meta[2*swap_index] < 0 && running_thread->num_pages < swap_index) {
-			running_thread->num_pages++;
-			break;
+		// save the location of the next free page
+		}
+		if (next_free < 0 && page_meta_id[swap_index] < 0) {
+			next_free = swap_index;
 		}
 		swap_index++;
+	}
+
+	// the desired page does not exist yet, so give it the next free page
+	if (swap_index == public_pages*(1+THREAD_LIM) && running_thread->num_pages < public_pages) {
+		swap_index = next_free;
+		running_thread->num_pages++;
 	}
 
 	void* right_page = NULL;
@@ -133,7 +140,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 	mprotect(right_page, PAGE_SIZE, PROT_READ | PROT_WRITE);	 // unlock right page
 	
 	// special case: thread accesses the first page for the first time, causes malloc error from swapping in empty page
-	if (page_meta[2*swap_index] < 0 && index == 0) {
+	if (page_meta_id[swap_index] < 0 && index == 0) {
 		size(right_page) = public_lim -6;
 		allocd(right_page) = 0;
 	}
@@ -142,15 +149,15 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
         memcpy(temp_page, right_page, PAGE_SIZE);			 // load right_page into swap space
 		
 	// copy out the metadata of the page running_thread attempted to access (unsuccessfully) 
-	page_meta[2*swap_index] = page_meta[2*index]; 	// TID
-	page_meta[2*swap_index + 1] = index;		// location in memory
+	page_meta_id[swap_index] = page_meta_id[index]; 	// TID
+	page_meta_index[swap_index] = index;		// location in memory
 
 
         memcpy(right_page, wrong_page, PAGE_SIZE);	// load page you tried to access into original position of page you wanted to access
 	
 	// copy in metadata of page you wanted to access
-	page_meta[2*index] = running_thread->id;
-	page_meta[2*index + 1] = index;
+	page_meta_id[index] = running_thread->id;
+	page_meta_index[index] = index;
        
 	// load page you wanted to access into the location you tried to access 
 	memcpy(wrong_page, temp_page, PAGE_SIZE);
@@ -174,17 +181,19 @@ void memory_init() {
 	shared_lim = 4*PAGE_SIZE;							// 4 pages for shared allocations
 	public_lim = (3*(NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE;			// 3/4 of the remainning space - stacks for general thread use
 	public_pages = public_lim/PAGE_SIZE;
-	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
-	page_meta = memory + STACK_SIZE*THREAD_LIM;
-	private_mem = (void *)page_meta + (4*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
+	private_lim = ((NUM_PAGES - 16*THREAD_LIM - 4)/4)*PAGE_SIZE - (5*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;	// the remaining 1/4 for metadata and the scheduler
+	page_meta_id = memory + STACK_SIZE*THREAD_LIM;
+	page_meta_index = (void *)page_meta_id + public_pages*(THREAD_LIM+1);
+	private_mem = (void *)page_meta_id + (5*public_pages*(THREAD_LIM+1)/PAGE_SIZE + 1)*PAGE_SIZE;
 	public_mem = private_mem + private_lim;
 	shared_mem = public_mem + public_lim;
 
 
 	// initialize page metadata for main memory and swapfile
 	int i;
-	for (i = 0; i < 2*public_pages*(1 + THREAD_LIM); i++) {
-		page_meta[i] = -1;
+	for (i = 0; i < public_pages*(1 + THREAD_LIM); i++) {
+		page_meta_id[i] = -1;
+		page_meta_index[i] = -1;
 	}
 
 	// initialize malloc metadata
@@ -209,7 +218,7 @@ void memory_init() {
  	 * up the swapfile and maps
  	 * it to a virtual address space
  	 */
-	size_t swp_size = public_pages*THREAD_LIM*(PAGE_SIZE + 4);				// space for pages and metadata
+	size_t swp_size = public_pages*THREAD_LIM*(PAGE_SIZE);				// space for pages and metadata
 	swpfd = open("my_pthread.swp", O_CREAT|O_RDWR|O_TRUNC, S_IRWXU);               		// opens swapfile
 	if(swpfd < 0) {
 		perror("Could not open swapfile");
@@ -486,6 +495,15 @@ void free_ID(int thread_id) {
 	ptr->tid = thread_id;
 	ptr->next = tid_list;
 	tid_list = ptr;
+
+	// mark the pages associated with this id as free
+	int i = 0;
+	for (i = 0; i < public_pages*(THREAD_LIM+1); i++) {
+		if (page_meta_id[i] == thread_id) {
+			page_meta_id[i] = -1;
+		}
+	}
+
 	return;
 }
 
@@ -626,11 +644,11 @@ void scheduler_alarm_handler(int signum) {
 	// mprotect all of prev_thread's memory and unprotect running_thread's memory (that are already in the correct location)
 	int i;
 	for (i = 0; i < public_pages; i++) {
-		if (page_meta[2*i + 1] == i) {
-			if (page_meta[2*i] == prev_thread->id) {
+		if (page_meta_index[i] == i) {
+			if (page_meta_id[i] == prev_thread->id) {
 				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_NONE);
 			}
-			if (page_meta[2*i] == running_thread->id) {
+			if (page_meta_id[i] == running_thread->id) {
 				mprotect((public_mem + i*PAGE_SIZE), PAGE_SIZE, PROT_READ | PROT_WRITE);
 			}
 		}
