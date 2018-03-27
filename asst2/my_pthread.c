@@ -12,7 +12,7 @@
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
 #define MUTEX_LIM 100			// maximum number of mutexes allowed
-#define SIG SIGRTMIN
+#define SIG SIGRTMAX
 // These two macros are for accessing the size metadata and allocated metadata of a pointer
 // associated with a block in our memory which are stored in the first 4 bytes of eqch block
 #define size(ptr) *((int*)(ptr))
@@ -586,7 +586,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 
 	sa->sa_flags = SA_SIGINFO;
 	sa->sa_sigaction = scheduler_alarm_handler;
-	if (!sigaction(SIG, sa, NULL)) {
+	if (sigaction(SIG, sa, NULL)) {
 		fprintf(stderr, "ERROR: Failed to establish scheduler\n");
 		exit(EXIT_FAILURE);
 	}
@@ -596,7 +596,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	sev->sigev_notify = SIGEV_SIGNAL;
 	sev->sigev_signo = SIG;
 	sev->sigev_value.sival_ptr = timer;
-	if (!timer_create(CLOCK_REALTIME, sev, timer)) {
+	if (timer_create(CLOCK_REALTIME, sev, timer)) {
 		fprintf(stderr, "ERROR: Failed to establish timer\n");
 		exit(EXIT_FAILURE);
 	}
@@ -613,7 +613,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	reset->it_interval.tv_nsec = 25;			//at the experiation of the time the value should be reset to 25 microseconds
 	cont = myallocate(sizeof(struct itimerspec), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memoory for he cont timer where the current time will be set at a future point
 
-	if (!timer_settime(*timer, 0, reset, NULL)) {
+	if (timer_settime(*timer, 0, reset, NULL)) {
 		fprintf(stderr, "ERROR: Failed to set timer\n");
 		exit(EXIT_FAILURE);
 	}
@@ -625,7 +625,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 //Signal handler to activate the scheduler on periodic SIGVTALRM, this is the body of the scheduler
 void scheduler_alarm_handler(int sig, siginfo_t * si, void * uc) {
 	// pause the timer
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -635,7 +635,7 @@ void scheduler_alarm_handler(int sig, siginfo_t * si, void * uc) {
 		case active :
 			// check if the thread has finished its alotted time, if not increment its interval counter and resume
 			if (running_thread->intervals_run++ < current_priority) { 
-				        if (!timer_settime(*timer, 0, reset, NULL)) {
+				        if (timer_settime(*timer, 0, reset, NULL)) {
                 				fprintf(stderr, "ERROR: Failed to set timer\n");
                 				exit(EXIT_FAILURE);
         				}
@@ -699,7 +699,7 @@ void scheduler_alarm_handler(int sig, siginfo_t * si, void * uc) {
 	}
 
 	// reset the timer
-        if (!timer_settime(*timer, 0, reset, NULL)) {
+        if (timer_settime(*timer, 0, reset, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -727,7 +727,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	}
 
 	// pause the timer, this should be atomic
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -735,7 +735,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucontext_t* ucp = &(thread->uc);
 
 	if(getcontext(ucp) == -1) {
-	        if (!timer_settime(*timer, 0, cont, NULL)) {
+	        if (timer_settime(*timer, 0, cont, NULL)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -746,7 +746,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	ucp->uc_stack.ss_sp = myallocate(STACK_SIZE, __FILE__, __LINE__, STACK_ALLOCATION, thread->id);
 	
 	if(ucp->uc_stack.ss_sp == NULL) { //malloc() failed to get get necessary resources, set errno and return
-	        if (!timer_settime(*timer, 0, cont, NULL)) {
+	        if (timer_settime(*timer, 0, cont, NULL)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -771,7 +771,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 	thread->num_pages = 0;
 	
 	// resume timer
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -791,7 +791,7 @@ void my_pthread_yield() {
 // any return value from the thread will be saved.
 void pthread_exit(void *value_ptr) {
 	// pause the timer
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -834,18 +834,18 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	// if the thread to be joined is not finished, wait on it
 	if (!done[thread.id]) {
 		//pause timer
-	        if (!timer_settime(*timer, 0, stop, cont)) {
+	        if (timer_settime(*timer, 0, stop, cont)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
 		running_thread->status = wait_thread;
 		running_thread->wait_id = thread.id;
 		waiting[thread.id] = running_thread; 
-		raise(SIGEV_SIGNAL);
+		raise(SIG);
 	}
 	
 	// pause timer
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -861,7 +861,7 @@ int my_pthread_join(my_pthread_t thread, void **value_ptr) {
 	free_ID(thread.id);
 
 	// resume
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -911,14 +911,14 @@ int my_pthread_mutex_init(my_pthread_mutex_t *mutex, const pthread_mutexattr_t *
 // Locks a given mutex, other threads attempting to access this mutex will not run until it is unlocked.
 int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	// pause timer, this opperation needs to be atomic
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
 
 	// invalid value for mutex
 	if(mutex <= 0) {
-	        if (!timer_settime(*timer, 0, cont, NULL)) {
+	        if (timer_settime(*timer, 0, cont, NULL)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -928,7 +928,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	// check whether the mutex is available and assign it or add the thread to the mutex queue
 	if (mutex->user == running_thread) { 
 		// already have the lock, resume the clock and return
-	        if (!timer_settime(*timer, 0, cont, NULL)) {
+	        if (timer_settime(*timer, 0, cont, NULL)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -941,7 +941,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 		// resume timer and signal so another thread can be scheduled
 		raise(SIG);
 
-	        if (!timer_settime(*timer, 0, stop, cont)) {
+	        if (timer_settime(*timer, 0, stop, cont)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -962,7 +962,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 // Unlocks a given mutex.
 int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	// pause timer, this needs to be atomic
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -984,7 +984,7 @@ int my_pthread_mutex_unlock(my_pthread_mutex_t *mutex) {
 	}
 
 	// resume the timer and return
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -1000,7 +1000,7 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 
 
 	// pause timer, does this need to be atomic?
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -1034,7 +1034,7 @@ int my_pthread_mutex_destroy(my_pthread_mutex_t *mutex) {
 	mutex->user = NULL;
 
 	// resume timer and return
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }

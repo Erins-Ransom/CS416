@@ -12,7 +12,7 @@ void * foo(void* arg)
 		ptr[i] = 'd';
 	}
 	
-	while (1);
+//	while (1);
 
 	printf("yay threads\n");
 	pthread_exit(NULL);
