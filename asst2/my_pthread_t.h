@@ -7,11 +7,12 @@
 #define _GNU_SOURCE
 
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <malloc.h>
 #include <ucontext.h>
 #include <signal.h>
-#include <sys/time.h>
+#include <time.h>
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
@@ -19,7 +20,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #define USE_MY_PTHREAD 1;
 

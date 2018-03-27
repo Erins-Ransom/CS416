@@ -11,6 +11,9 @@ void * foo(void* arg)
 	for(i = 0; i < ALLOC_SIZE; i++) {
 		ptr[i] = 'd';
 	}
+	
+	while (1);
+
 	printf("yay threads\n");
 	pthread_exit(NULL);
 }
