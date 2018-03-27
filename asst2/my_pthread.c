@@ -953,7 +953,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 	mutex->user = running_thread;
 
 	// resume timer
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
