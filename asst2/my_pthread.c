@@ -12,7 +12,7 @@
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
 #define MUTEX_LIM 100			// maximum number of mutexes allowed
-#define SIG SIGRTMAX
+#define SIG SIGVTALRM
 // These two macros are for accessing the size metadata and allocated metadata of a pointer
 // associated with a block in our memory which are stored in the first 4 bytes of eqch block
 #define size(ptr) *((int*)(ptr))
@@ -62,7 +62,7 @@ static struct itimerspec * cont;                 // to store the current value
 void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 
         // pause the timer
-        if (!timer_settime(*timer, 0, stop, cont)) {
+        if (timer_settime(*timer, 0, stop, cont)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -96,7 +96,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
 		mprotect(wrong_page, PAGE_SIZE, PROT_READ | PROT_WRITE);
 
         	// resume timer
-	        if (!timer_settime(*timer, 0, cont, NULL)) {
+	        if (timer_settime(*timer, 0, cont, NULL)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
                 	exit(EXIT_FAILURE);
         	}
@@ -175,7 +175,7 @@ void vmem_sig_handler(int signo, siginfo_t *info, void *context) {
         mprotect(right_page, PAGE_SIZE, PROT_NONE);
 
         // resume timer
-        if (!timer_settime(*timer, 0, cont, NULL)) {
+        if (timer_settime(*timer, 0, cont, NULL)) {
                 fprintf(stderr, "ERROR: Failed to set timer\n");
                 exit(EXIT_FAILURE);
         }
@@ -255,6 +255,7 @@ void memory_init() {
          */
         act.sa_sigaction = vmem_sig_handler;
         act.sa_flags = SA_SIGINFO;
+	sigemptyset(&act.sa_mask);
         sigaction(SIGSEGV, &act, NULL);
 
 }
@@ -586,6 +587,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 
 	sa->sa_flags = SA_SIGINFO;
 	sa->sa_sigaction = scheduler_alarm_handler;
+	sigemptyset(&sa->sa_mask);
 	if (sigaction(SIG, sa, NULL)) {
 		fprintf(stderr, "ERROR: Failed to establish scheduler\n");
 		exit(EXIT_FAILURE);
