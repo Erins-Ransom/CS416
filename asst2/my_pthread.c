@@ -12,7 +12,7 @@
 #define NUM_PRIORITY 5			//number of static priority levels
 #define THREAD_LIM 40			// maximum number of threads allowed
 #define MUTEX_LIM 100			// maximum number of mutexes allowed
-
+#define SIG SIGRTMIN
 // These two macros are for accessing the size metadata and allocated metadata of a pointer
 // associated with a block in our memory which are stored in the first 4 bytes of eqch block
 #define size(ptr) *((int*)(ptr))
@@ -586,7 +586,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 
 	sa->sa_flags = SA_SIGINFO;
 	sa->sa_sigaction = scheduler_alarm_handler;
-	if (!sigaction(SIGEV_SIGNAL, sa, NULL)) {
+	if (!sigaction(SIG, sa, NULL)) {
 		fprintf(stderr, "ERROR: Failed to establish scheduler\n");
 		exit(EXIT_FAILURE);
 	}
@@ -594,7 +594,7 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	sev = myallocate(sizeof(struct sigevent), __FILE__, __LINE__, PRIVATE_REQ, -1);
 
 	sev->sigev_notify = SIGEV_SIGNAL;
-	sev->sigev_signo = SIGEV_SIGNAL;
+	sev->sigev_signo = SIG;
 	sev->sigev_value.sival_ptr = timer;
 	if (!timer_create(CLOCK_REALTIME, sev, timer)) {
 		fprintf(stderr, "ERROR: Failed to establish timer\n");
@@ -783,7 +783,7 @@ int my_pthread_create( my_pthread_t * thread, pthread_attr_t * attr, void *(*fun
 void my_pthread_yield() {
 	// set the status of the thread to yield then signal the scheduler
 	running_thread->status = yield;
-	raise(SIGEV_SIGNAL);	
+	raise(SIG);	
 }
 
 
@@ -802,7 +802,7 @@ void pthread_exit(void *value_ptr) {
 	// set thread status to exit and signal the scheduler to take care of it
 	running_thread->status = thread_exit;
 	done[running_thread->id] = 1;
-	raise(SIGEV_SIGNAL);
+	raise(SIG);
 }
 
 
@@ -939,7 +939,7 @@ int my_pthread_mutex_lock(my_pthread_mutex_t *mutex) {
 		// mark the thread as waiting
 		running_thread->status = wait_mutex;
 		// resume timer and signal so another thread can be scheduled
-		raise(SIGEV_SIGNAL);
+		raise(SIG);
 
 	        if (!timer_settime(*timer, 0, stop, cont)) {
                 	fprintf(stderr, "ERROR: Failed to set timer\n");
