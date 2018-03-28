@@ -572,9 +572,9 @@ int scheduler_init() {  		// should we return something? int to signal success/e
 	stop->it_interval.tv_usec = 0;				//this is a pause timer so the interval should be 0
 	timer = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memory for the timer
 	timer->it_value.tv_sec = 0;				//seconds are not used here
-	timer->it_value.tv_usec = 25;				//the initial time should be 25 microseconds
+	timer->it_value.tv_usec = 25000;			//the initial time should be 25 miliseconds
 	timer->it_interval.tv_sec = 0;				//seconds are not used here
-	timer->it_interval.tv_usec = 25;			//at the experiation of the time the value should be reset to 25 microseconds
+	timer->it_interval.tv_usec = 25000;			//at the experiation of the time the value should be reset to 25 miliseconds
 	cont = myallocate(sizeof(struct itimerval), __FILE__, __LINE__, PRIVATE_REQ, -1);		//set aside memoory for he cont timer where the current time will be set at a future point
 	setitimer(ITIMER_VIRTUAL, timer, NULL);			//start the timer
 

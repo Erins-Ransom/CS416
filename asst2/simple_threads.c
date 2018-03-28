@@ -12,6 +12,9 @@ void * foo(void* arg)
 		ptr[i] = 'd';
 	}
 	printf("yay threads\n");
+
+	while(1);
+
 	pthread_exit(NULL);
 }
 
