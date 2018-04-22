@@ -77,13 +77,39 @@ void sfs_destroy(void *userdata)
  */
 int sfs_getattr(const char *path, struct stat *statbuf)
 {
-    int retstat = 0;
-    char fpath[PATH_MAX];
+	int retstat = 0;
+    	char fpath[PATH_MAX];
     
-    log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n",
-	  path, statbuf);
-    
-    return retstat;
+    	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);
+   
+    	if( strcmp(path, "/") == 0 ) {	/* case of root directory */
+		//statbuf->st_dev;	/* ID of device containing file, ignored */
+               	
+		/*
+ 		 * the inode number for the root directory
+ 		 * in linux file systems is traditionally 2 
+ 		 */
+		statbuf->st_ino = 2;       					/* inode number */
+               	
+		/*
+ 		 * S_IFDIR: is a directory
+ 		 * S_IRWXU, S_IRWXG: user and group can read, write, execute
+ 		 * S_IRWXO: others can read, write, execute
+ 		 */ 
+		statbuf->st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;      	/* file type and mode */
+               	statbuf->st_nlink = 1;     					/* number of hard links */
+               	statbuf->st_uid = 0;       					/* user ID of owner */
+               	statbuf->st_gid = 0;       					/* group ID of owner */
+               	//statbuf->st_rdev;      					/* device ID (if special file), ignored(?) */
+               	statbuf->st_size = 0;      					/* total size, in bytes */
+               	//statbuf->st_blksize;   					/* blocksize for filesystem I/O, ignored */
+               	statbuf->st_blocks = 0;    					/* number of 512B blocks allocated */
+
+	} else {
+	 
+	}
+ 
+    	return retstat;
 }
 
 /**
