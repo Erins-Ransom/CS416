@@ -24,10 +24,11 @@
 #include <limits.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 
 /***** struct stat *****/
  //dev_t     st_dev;         /* ID of device containing file, ignored */
- //ino_t     st_ino;         /* inode number */
+ //ino_t     st_ino;         /* inode number, ignored */
  //mode_t    st_mode;        /* protection */
  //nlink_t   st_nlink;       /* number of hard links */
  //uid_t     st_uid;         /* user ID of owner */
@@ -38,16 +39,25 @@
  //blkcnt_t  st_blocks;      /* number of 512B blocks allocated */
 
 /***** MACROS *****/
-#define FILE_NAME_LIM 255
+#define MAX_FILES 128
+#define MAX_PATH_LEN 255
 
+/*
+ * mapping of file path to
+ * inode number
+ */
+typedef struct path_map {
+	int st_ino;
+	char path[MAX_PATH_LEN];
+} path_map_t;
 
 /*
  * linked list of disk blocks for file
  */
-typedef struct block_ptr {
-	char* block;	// pointer to current block
-	char* next;	// pointer to next block
-} block_ptr_t;
+typedef struct block_list {
+	int block_num;		// number of current block
+	struct block_ptr *next;	// pointer to next block
+} block_list_t;
 
 /*
  * virtual inode structure
@@ -56,39 +66,14 @@ typedef struct block_ptr {
  * inode table
  */
 typedef struct inode {
- 	ino_t     st_ino;         /* inode number */
- 	mode_t    st_mode;        /* protection */
- 	nlink_t   st_nlink;       /* number of hard links */
-	uid_t     st_uid;         /* user ID of owner */
-	gid_t     st_gid;         /* group ID of owner */
- 	off_t     st_size;        /* total size, in bytes */
- 	blkcnt_t  st_blocks;      /* number of 512B blocks allocated */
-	struct block_ptr* data;   /* pointer to list of data blocks */
+	struct stat stat;	// metadata
+	block_list_t *data;	// pointer to list of disk blocks
 } inode_t;
-
-/* 
- * file name to v_node mapping
- * stored by directories
- */
-typedef struct link {
-	char name[FILE_NAME_LIM];	/* file name */
-	ino_t st_ino;			/* inode number */
-} link_t;
-
-/*
- * metadata for an open file
- * represents single entry 
- * in open file table
- */
-typedef struct open_file {
-	ino_t st_ino;   /* inode number */
-	char* pos;	// current position in the file
-	int refcnt;	// number of open file descriptors that point to this file
-} open_file_t;
 
 struct sfs_state {
     FILE *logfile;
     char *diskfile;
 };
+
 #define SFS_DATA ((struct sfs_state *) fuse_get_context()->private_data)
 #endif

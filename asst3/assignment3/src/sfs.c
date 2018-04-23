@@ -22,6 +22,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <time.h>
 
 #ifdef HAVE_SYS_XATTR_H
 #include <sys/xattr.h>
@@ -37,27 +38,26 @@
 //
 
 /***** struct stat *****/
- //dev_t     st_dev;         /* ID of device containing file */
- //ino_t     st_ino;         /* inode number */
+ //dev_t     st_dev;         /* ID of device containing file, ignored */
+ //ino_t     st_ino;         /* inode number, ignored */
  //mode_t    st_mode;        /* protection */
  //nlink_t   st_nlink;       /* number of hard links */
  //uid_t     st_uid;         /* user ID of owner */
  //gid_t     st_gid;         /* group ID of owner */
- //dev_t     st_rdev;        /* device ID (if special file) */
+ //dev_t     st_rdev;        /* device ID (if special file), ignored */
  //off_t     st_size;        /* total size, in bytes */
- //blksize_t st_blksize;     /* blocksize for filesystem I/O */
+ //blksize_t st_blksize;     /* blocksize for filesystem I/O, ignored */
  //blkcnt_t  st_blocks;      /* number of 512B blocks allocated */
 
 /***** MACROS *****/
 #define MAX_NODES 256
-#define MAX_OPEN 256
 #define MAX_LINK 256
-
+#define MAX_BLOCKS 2048
 
 /***** GLOBALS *****/
 inode_t 	inode_table[MAX_NODES];
-open_file_t 	open_file_table[MAX_OPEN];
-link_t 		link_table[MAX_LINK];
+path_map_t	name_table[MAX_LINK];
+short		disk_blocks[MAX_BLOCKS];
 
 /**
  * Initialize filesystem
@@ -76,28 +76,26 @@ void *sfs_init(struct fuse_conn_info *conn)
     	log_conn(conn);
     	log_fuse_context(fuse_get_context());
 
-	disk_open((SFS_DATA)->diskfile);	// set diskfile based on sfs_state
-	
-	/* zero out all tables */
+	/* set diskfile based on sfs_state */
+	disk_open((SFS_DATA)->diskfile);
+
+	/* zero out all tables (add check for pre existing file system) */
 	memset(inode_table, 0, sizeof(inode_t)*MAX_NODES);
-	memset(open_file_table, 0, sizeof(open_file_t)*MAX_OPEN);
-	memset(link_table, 0, sizeof(link_t)*MAX_LINK); 
+	memset(name_table,  0, sizeof(path_map_t)*MAX_LINK);
+	memset(disk_blocks, 0, sizeof(short)*MAX_BLOCKS);
 
-	/* 
-	 * initialize metadata for the root
-	 * directory and enter it into the vnode
-	 * table and the link table
-	 */
-	inode_table[0].st_ino = 1;
-	inode_table[0].st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
-        inode_table[0].st_nlink = 1;	// there is only one hard link to root
-        inode_table[0].st_uid = 0;
-        inode_table[0].st_gid = 0;
-        inode_table[0].st_size = 0;
-        inode_table[0].st_blocks = 1;	// allocate one block for root
+	/* enter root directory into inode table */
+	inode_table[0].stat.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
+        inode_table[0].stat.st_nlink = 2;
+        inode_table[0].stat.st_uid = getuid();
+        inode_table[0].stat.st_gid = getgid();
+        inode_table[0].stat.st_size = 0;
+        inode_table[0].stat.st_blocks = 0;
+	inode_table[0].data = NULL;
 
-	sprintf( (char*)(link_table[0].name), "/" );	// set name of root	
-	link_table[0].st_ino = 0;
+	/* enter root directory into name table  */
+	sprintf(name_table[0].path, "/");
+	name_table[0].st_ino = 0;
 
     return SFS_DATA;
 }
@@ -110,7 +108,9 @@ void *sfs_init(struct fuse_conn_info *conn)
  * Introduced in version 2.3
  */
 void sfs_destroy(void *userdata)
-{
+{	
+	/* must write all tables to persistent memory */
+
 	disk_close();
 	log_msg("\nsfs_destroy(userdata=0x%08x)\n", userdata);
 }
@@ -126,43 +126,16 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 	int retstat = 0;
     	char fpath[PATH_MAX];
     	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);
-
+	
+	/* path name lookup */
 	int i;
-	if( strcmp(path, "/") == 0 ) {
-		i = 0;
-	} else {
-
-		/*
-        	 * extract file name and
-		 * search the link table for
-         	 * the name mapping and then
-         	 * set metadata based on the
-         	 * inode metadata
-         	 */ 
-		char* path_cpy = malloc(strlen(path)+1);
-		strcpy(path_cpy, path);
-
-		char *tok = strtok(path_cpy, "/"), *name = NULL;        
-		while(tok != NULL) {
-			name = tok;
-			tok = strtok(NULL, "/");
+	for(i = 0; i < MAX_LINK; i++) {
+		if( strcmp(path, name_table[i].path) == 0 ) {
+			break;
 		}
-
-		for(i = 0; i < MAX_LINK; i++) {
-			if( strcmp(name, link_table[i].name) == 0 ) {
-				break;
-			}
-        	}
 	}
+	memcpy( statbuf, &(inode_table[i].stat), sizeof(struct stat) );
 
-	statbuf->st_ino = inode_table[i].st_ino;
-       	statbuf->st_mode = inode_table[i].st_mode;
-       	statbuf->st_nlink = inode_table[i].st_nlink;
-       	statbuf->st_uid = inode_table[i].st_uid;
-       	statbuf->st_gid = inode_table[i].st_gid;
-       	statbuf->st_size = inode_table[i].st_size;
-       	statbuf->st_blocks = inode_table[i].st_blocks;
- 
     	return retstat;
 }
 
@@ -180,12 +153,10 @@ int sfs_getattr(const char *path, struct stat *statbuf)
  */
 int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n",
-	    path, mode, fi);
+	int retstat = 0;
+   	log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n", path, mode, fi);
     
-    
-    return retstat;
+    	return retstat;
 }
 
 /** Remove a file */
@@ -348,10 +319,12 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
 int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
 	       struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    
-    
-    return retstat;
+    	int retstat = 0;
+   
+	filler( buf, ".", NULL, 0 ); 	// Current Directory
+	filler( buf, "..", NULL, 0 ); 	// Parent Directory
+
+    	return retstat;
 }
 
 /** Release directory
