@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <string.h>
 
 /***** struct stat *****/
  //dev_t     st_dev;         /* ID of device containing file, ignored */
@@ -39,8 +40,8 @@
  //blkcnt_t  st_blocks;      /* number of 512B blocks allocated */
 
 /***** MACROS *****/
-#define MAX_FILES 128
-#define MAX_PATH_LEN 255
+#define MAX_PATH_LEN 128
+#define MAX_FILE_BLOCKS 128
 
 /*
  * mapping of file path to
@@ -52,22 +53,14 @@ typedef struct path_map {
 } path_map_t;
 
 /*
- * linked list of disk blocks for file
- */
-typedef struct block_list {
-	int block_num;		// number of current block
-	struct block_ptr *next;	// pointer to next block
-} block_list_t;
-
-/*
  * virtual inode structure
  * holds all file metadata
  * represents single entry in
  * inode table
  */
 typedef struct inode {
-	struct stat stat;	// metadata
-	block_list_t *data;	// pointer to list of disk blocks
+	struct stat stat;		// metadata
+	short blocks[MAX_FILE_BLOCKS];	// list of block numbers
 } inode_t;
 
 struct sfs_state {
