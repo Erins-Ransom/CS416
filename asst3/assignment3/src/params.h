@@ -65,6 +65,16 @@ typedef struct inode {
 	short blocks[MAX_FILE_BLOCKS];	// list of block numbers
 } inode_t;
 
+/*
+ * entry for an open file
+ */
+typedef struct file_entry {
+	int refcnt;
+	int st_ino;
+	off_t pos;
+} file_entry_t;
+
+
 struct sfs_state {
     FILE *logfile;
     char *diskfile;
