@@ -57,12 +57,88 @@
 
 /***** GLOBALS *****/	// all these need to be kept on disk
 inode_t 	inode_table[MAX_NODES];
-int		next_free_inode;
-
 path_map_t	name_table[MAX_LINK];
-int		next_free_mapping;
-
 short		disk_blocks[NUM_BLOCKS];
+
+int get_inode() {
+	int i, j;
+	for(i = 0; i < MAX_NODES; i++) {
+		if(inode_table[i].avail == FREE) {
+			inode_table[i].avail = ALLOCD;
+			for(j = 0; j < MAX_FILE_BLOCKS; j++) {
+				inode_table[i].blocks[j] = -1;
+			}
+			return i;
+		}
+	}	
+	return -1;
+}
+
+void free_inode(int st_ino) {
+	inode_table[st_ino].stat.st_nlink--;
+	if(inode_table[st_ino].stat.st_nlink > 0) {
+		return;
+	}
+
+	memset( &(inode_table[st_ino].stat), 0, sizeof(struct stat) );
+	int i;
+	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
+                inode_table[st_ino].blocks[i] = -1;
+        }
+
+	inode_table[st_ino].avail = FREE;
+	return;
+}
+
+int get_mapping() {
+	int i;
+        for(i = 0; i < MAX_LINK; i++) {
+                if(name_table[i].avail == FREE) {
+                        name_table[i].avail = ALLOCD;
+                        return i;
+                }
+        }       
+        return -1;	
+}
+
+void free_mapping(int st_ino) {
+	memset( &(inode_table[st_ino]), 0, sizeof(inode_t) );
+        inode_table[st_ino].avail = FREE;
+        return;
+}
+
+int get_block() {
+	int i;
+	for(i = 0; i < NUM_BLOCKS; i++) {
+		if(disk_blocks[i] == FREE) {
+			disk_blocks[i] = ALLOCD;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void free_block(int i) {
+	disk_blocks[i] = FREE;
+	return;
+}
+
+int path_lookup(const char *path) {
+	int i;
+	for(i = 0; i < MAX_LINK; i++) {
+		if( strcmp(name_table[i].path, path) == 0 ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void removeSubstring(char *s,const char *toremove) {
+  	while( s = strstr(s, toremove) ) {
+    		memmove( s, s+strlen(toremove), 1+strlen(s+strlen(toremove)) );
+	}
+	return;
+}
 
 /**
  * Initialize filesystem
@@ -89,34 +165,34 @@ void *sfs_init(struct fuse_conn_info *conn)
 	memset(name_table,  0, sizeof(path_map_t)*MAX_LINK);
 	memset(disk_blocks, FREE, sizeof(short)*NUM_BLOCKS);
 
-	next_free_inode = 0;
-	next_free_mapping = 0;
-
 	// how to we check for a pre-existing file system?
 
+
 	/* enter root directory into inode table */
-	inode_table[0].stat.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
-        inode_table[0].stat.st_nlink = 2;
-        inode_table[0].stat.st_uid = getuid();
-        inode_table[0].stat.st_gid = getgid();
-        inode_table[0].stat.st_size = BLOCK_SIZE;
-        inode_table[0].stat.st_blocks = 1;
-	inode_table[0].stat.st_atime = time(NULL);
-        inode_table[0].stat.st_mtime = time(NULL);
-        inode_table[0].stat.st_ctime = time(NULL);
+	int root_inode = get_inode();
+	inode_table[root_inode].stat.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
+        inode_table[root_inode].stat.st_nlink = 2;
+        inode_table[root_inode].stat.st_uid = getuid();
+        inode_table[root_inode].stat.st_gid = getgid();
+        inode_table[root_inode].stat.st_size = BLOCK_SIZE;
+        inode_table[root_inode].stat.st_blocks = 1;
+	inode_table[root_inode].stat.st_atime = time(NULL);
+        inode_table[root_inode].stat.st_mtime = time(NULL);
+        inode_table[root_inode].stat.st_ctime = time(NULL);
 	
 	int i;
 	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
-		inode_table[0].blocks[i] = -1;
+		inode_table[root_inode].blocks[i] = -1;
 	}
 
 	/* enter root directory into name table */
-	sprintf(name_table[0].path, "/");
-	name_table[0].st_ino = 0;
+	int root_mapping = get_mapping();
+	sprintf(name_table[root_mapping].path, "/");
+	name_table[root_mapping].st_ino = root_inode;
 
 	/* allocate disk block for root */
-	disk_blocks[0] = ALLOCD;
-	inode_table[0].blocks[0] = 0;
+	int root_block = get_block();
+	inode_table[root_inode].blocks[0] = root_block;
 
 	/* 
  	 * add . and .. as entries to root the syntax for directory data will
@@ -132,8 +208,6 @@ void *sfs_init(struct fuse_conn_info *conn)
 
 	block_write(0, "./0/../0");
 
-	next_free_inode++;
-	next_free_mapping++;
     	return SFS_DATA;
 }
 
@@ -164,15 +238,9 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     	char fpath[PATH_MAX];
     	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);
 	
-	/* path name lookup */
-	int i;
-	for(i = 0; i < MAX_LINK; i++) {
-		if( strcmp(path, name_table[i].path) == 0 ) {
-			break;
-		}
-	}
+	int mapping = path_lookup(path);
 	
-	if(i == MAX_LINK) {	// path not found
+	if(mapping < 0) {	// path not found
 		memset(statbuf, 0, sizeof(struct stat));
 		statbuf->st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
 		statbuf->st_nlink = 1;
@@ -188,7 +256,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 	}
 	
 	
-	memcpy( statbuf, &(inode_table[i].stat), sizeof(struct stat) );
+	memcpy( statbuf, &(inode_table[mapping].stat), sizeof(struct stat) );
 
     	return retstat;
 }
@@ -212,27 +280,31 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 	/* set file handle */
 	//memset(fi, 0, sizeof(struct fuse_file_info));
-	fi->fh = next_free_inode;
+	fi->fh = get_inode();
+	if(fi->fh < 0) {
+		return -ENOMEM;
+	}
+
 
 	/* enter file  into inode table */
-        inode_table[next_free_inode].stat.st_mode = mode;
-        inode_table[next_free_inode].stat.st_nlink = 1;
-        inode_table[next_free_inode].stat.st_uid = getuid();
-        inode_table[next_free_inode].stat.st_gid = getgid();
-        inode_table[next_free_inode].stat.st_size = 0;
-        inode_table[next_free_inode].stat.st_blocks = 0;
-	inode_table[next_free_inode].stat.st_atime = time(NULL);
-	inode_table[next_free_inode].stat.st_mtime = time(NULL);
-	inode_table[next_free_inode].stat.st_ctime = time(NULL);
-
-        int i;
-        for(i = 0; i < MAX_FILE_BLOCKS; i++) {
-                inode_table[next_free_inode].blocks[i] = -1;
-        }
+        inode_table[fi->fh].stat.st_mode = mode;
+        inode_table[fi->fh].stat.st_nlink = 1;
+        inode_table[fi->fh].stat.st_uid = getuid();
+        inode_table[fi->fh].stat.st_gid = getgid();
+        inode_table[fi->fh].stat.st_size = 0;
+        inode_table[fi->fh].stat.st_blocks = 0;
+	inode_table[fi->fh].stat.st_atime = time(NULL);
+	inode_table[fi->fh].stat.st_mtime = time(NULL);
+	inode_table[fi->fh].stat.st_ctime = time(NULL);
 
         /* enter file into name table */
-        sprintf(name_table[next_free_mapping].path, path);
-        name_table[next_free_mapping].st_ino = next_free_inode;
+	int mapping = get_mapping();        
+	if(mapping < 0) {
+		free_inode(fi->fh);
+		return -ENOMEM;
+	}
+	sprintf(name_table[mapping].path, path);
+        name_table[mapping].st_ino = fi->fh;
 
         /* allocate disk block for file */
         //disk_blocks[0] = ALLOCD;
@@ -246,21 +318,46 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	while(*ptr != '\0') {	
 		ptr++;
 	}
-	sprintf(ptr, "%s/%i", path, next_free_inode);
+	sprintf(ptr, "%s/%i", path, fi->fh);
 	block_write(inode_table[0].blocks[0], buf);
+	inode_table[0].stat.st_nlink++;
 
- 	next_free_inode++;
-	next_free_mapping++;
     	return retstat;
 }
 
 /** Remove a file */
 int sfs_unlink(const char *path)
 {
-    int retstat = 0;
-    log_msg("sfs_unlink(path=\"%s\")\n", path);
+	int retstat = 0;
+    	log_msg("sfs_unlink(path=\"%s\")\n", path);
+
+	/* path lookup  */
+	int mapping = path_lookup(path);
+	if(mapping < 0) {
+		return -ENOENT;
+	}	
+
+	/* update inode table */
+	free_inode(name_table[mapping].st_ino);
+
+	/* update name table  */
+	free_mapping(mapping);
+
+	/* update root directory */
+	char *entry = malloc(MAX_PATH_LEN);
+	memset(entry, 0, MAX_PATH_LEN);
+	sprintf(entry, "%s/%i", path, name_table[mapping].st_ino);
+
+	void *buf = malloc(BLOCK_SIZE);
+	memset(buf, 0, BLOCK_SIZE);
+	block_read(inode_table[0].blocks[0], buf);	
+
+	removeSubstring((char*)buf, entry);
+
+	block_write(inode_table[0].blocks[0], buf);
+	inode_table[0].stat.st_nlink--;
  
-    return retstat;
+    	return retstat;
 }
 
 /** File open operation

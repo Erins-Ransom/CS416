@@ -48,6 +48,7 @@
  * inode number
  */
 typedef struct path_map {
+	short avail;			// 0 if free, 1 if not
 	int st_ino;
 	char path[MAX_PATH_LEN];
 } path_map_t;
@@ -59,6 +60,7 @@ typedef struct path_map {
  * inode table
  */
 typedef struct inode {
+	short avail;			// 0 if free, 1 if not
 	struct stat stat;		// metadata
 	short blocks[MAX_FILE_BLOCKS];	// list of block numbers
 } inode_t;
