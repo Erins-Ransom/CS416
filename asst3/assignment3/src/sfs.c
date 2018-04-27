@@ -105,10 +105,11 @@ int get_mapping() {
         return -1;	
 }
 
-void free_mapping(int st_ino) {
-	memset( &(inode_table[st_ino]), 0, sizeof(inode_t) );
-        inode_table[st_ino].avail = FREE;
-        return;
+void free_mapping(int mapping) {
+	name_table[mapping].avail = FREE;
+	name_table[mapping].st_ino = -1;
+	memset( name_table[mapping].path, 0, MAX_PATH_LEN);
+	return;
 }
 
 int get_block() {
@@ -304,11 +305,15 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	int retstat = 0;
    	log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n", path, mode, fi);
 
+	if(path_lookup(path) > 0) {
+		return -EEXIST;
+	}
+
 	/* set file handle */
 	//memset(fi, 0, sizeof(struct fuse_file_info));
 	fi->fh = get_fh();
 	if(fi->fh < 0) {
-		return -ENOMEM;
+		return -EMFILE;
 	}
 
 	int inode = get_inode();
@@ -369,25 +374,24 @@ int sfs_unlink(const char *path)
 		return -ENOENT;
 	}	
 
-	/* update inode table */
-	free_inode(name_table[mapping].st_ino);
-
-	/* update name table  */
-	free_mapping(mapping);
-
 	/* update root directory */
 	char *entry = malloc(MAX_PATH_LEN);
 	memset(entry, 0, MAX_PATH_LEN);
 	sprintf(entry, "%s/%i", path, name_table[mapping].st_ino);
-
 	void *buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
 	block_read(inode_table[root_inode].blocks[0], buf);	
 
 	removeSubstring((char*)buf, entry);
+	memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
+
 
 	block_write(inode_table[root_inode].blocks[0], buf);
 	inode_table[root_inode].stat.st_nlink--;
+
+	/* update tables  */
+	free_inode(name_table[mapping].st_ino);
+	free_mapping(mapping);
  
     	return retstat;
 }
@@ -415,11 +419,22 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
 	/* test permissions against mode  */
 	int gid = getgid();
 	int uid = getuid();
+	struct stat *stats = &(inode_table[name_table[mapping].st_ino].stat);
+
+	if(access(path, R_OK) == EACCES) {
+		return -EACCES;
+	}
+	
+	if( S_ISDIR(stats->st_mode) ) {
+		return -EISDIR;
+	}
 
 	/* allocate file handle */	
-	fi->fh = get_fh();
-	if(fi->fh) {
+	retstat = get_fh();
+	if(retstat < 0) {
 		return -ENOMEM;
+	} else {
+		fi->fh = retstat;
 	}
 
 	open_files[fi->fh].refcnt = 1;
