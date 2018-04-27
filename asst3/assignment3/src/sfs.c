@@ -211,6 +211,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
    	log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n", path, mode, fi);
 
 	/* set file handle */
+	memset(fi, 0, sizeof(struct fuse_file_info));
 	fi->fh = next_free_inode;
 
 	/* enter file  into inode table */
