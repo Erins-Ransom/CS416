@@ -571,13 +571,13 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
  */
 int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
 {
-    	int retstat = 0, st_ino = -1;
-
-	if( strcmp(path, "/") == 0 ) {
-		st_ino = 0;
-	} else {
-		st_ino = fi->fh;	// make sure this is set in another funtion
+    	int retstat = 0, mapping, st_ino;
+	mapping = path_lookup(path);
+	if(mapping < 0) {
+		return -ENOENT;
 	}
+	
+	st_ino = name_table[mapping].st_ino;
 
 	char *entry_list = malloc(BLOCK_SIZE), *tok;
 	block_read(inode_table[st_ino].blocks[0] , entry_list);
