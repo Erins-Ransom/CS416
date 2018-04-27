@@ -481,12 +481,48 @@ int sfs_release(const char *path, struct fuse_file_info *fi)
  */
 int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
+	int retstat = 0;
+    	log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
 
-   
-    return retstat;
+	// check range
+        if(fi->fh < 0 || fi->fh > MAX_LINK-1) {
+                return -EBADF;
+        }
+
+        // check if open
+        if(open_files[fi->fh].st_ino < 0) {
+                return -EBADF;
+        }
+
+        struct stat *stat = &(inode_table[open_files[fi->fh].st_ino].stat);
+
+        if(offset >= stat->st_size) {
+                return EOF;
+        }	
+
+	// read would go beyong range of file
+	if(offset + size > stat->st_size) {
+		size = stat->st_size - offset;
+	}
+
+	/* calculate starting block */
+	int start_block = offset/BLOCK_SIZE;    // truncated 
+        int block_offset = offset % BLOCK_SIZE; // offset within starting block
+
+	/* read blocks into aligned buffer  */
+	int read_blocks = (offset + BLOCK_SIZE)/BLOCK_SIZE;	// number of blocks to read (truncated)
+	void *aligned_buf = malloc(read_blocks*BLOCK_SIZE);	// block-aligned buffer
+	char *pos = (char*)aligned_buf;
+	int i = 0;
+	while(read_blocks > 0) {
+		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+                pos += BLOCK_SIZE;
+		read_blocks--;
+		i++;
+	}
+
+	memcpy(buf, aligned_buf, size);
+    	return size;
 }
 
 /** Write data to an open file
@@ -497,15 +533,88 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
  *
  * Changed in version 2.2
  */
-int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+int sfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
-    
-    
-    return retstat;
+	int retstat = 0;
+    	log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
+
+	// check range
+	if(fi->fh < 0 || fi->fh > MAX_LINK-1) {
+		return -EBADF;
+	}
+
+	// check if open
+	if(open_files[fi->fh].st_ino < 0) {
+		return -EBADF;
+	}
+
+	struct stat *stat = &(inode_table[open_files[fi->fh].st_ino].stat);
+
+	if(offset > stat->st_size) {
+		return 0;
+	}
+
+	// calculate starting block
+	int start_block = offset/BLOCK_SIZE; 	// truncated 
+	int block_offset = offset % BLOCK_SIZE;	// offset within starting block
+
+	// file needs to be resized
+	void* block_buf = malloc(BLOCK_SIZE);
+	int i;
+	if(offset + size > stat->st_size) {
+		int blocks_needed = (offset + size - stat->st_size + BLOCK_SIZE)/BLOCK_SIZE; 	// truncated
+		int blocks_left = blocks_needed;	
+	
+		i = stat->st_blocks;
+		int block;
+		while(blocks_left > 0) {
+			block = get_block();
+			if(block < 0) {
+				return -ENOMEM;
+			} else {
+				block_read(block, block_buf);
+				memset(block_buf, 0, BLOCK_SIZE);
+				block_write(block, block_buf);
+			}		
+	
+			if(i > MAX_FILE_BLOCKS) {
+				return -EFBIG;
+			}
+			
+			inode_table[open_files[fi->fh].st_ino].blocks[i] = block;
+			i++;
+			blocks_left--;
+			stat->st_blocks++;
+		}
+
+		stat->st_size += size;
+	}
+
+	/* load file blocks being written to into continuous buffer */
+	int write_blocks = (size + BLOCK_SIZE)/BLOCK_SIZE;
+	void *cont_buffer = malloc(write_blocks*BLOCK_SIZE);
+	memset(cont_buffer, 0, write_blocks*BLOCK_SIZE);
+	char *pos = (char*)cont_buffer;
+		
+	for(i = 0; i < write_blocks; i++) {
+		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		pos += BLOCK_SIZE;
+	}	
+	
+	/* write to continuous buffer */
+	memcpy(cont_buffer, buf, size);
+
+	/* write back to disk */
+	pos = (char*)cont_buffer;	
+	for(i = 0; i < write_blocks; i++) {
+                block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		pos += BLOCK_SIZE;
+        }
+
+	free(block_buf);
+	free(cont_buffer);
+
+	return size;
 }
 
 
