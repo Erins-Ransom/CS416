@@ -101,6 +101,9 @@ void *sfs_init(struct fuse_conn_info *conn)
         inode_table[0].stat.st_gid = getgid();
         inode_table[0].stat.st_size = BLOCK_SIZE;
         inode_table[0].stat.st_blocks = 1;
+	inode_table[0].stat.st_atime = time(NULL);
+        inode_table[0].stat.st_mtime = time(NULL);
+        inode_table[0].stat.st_ctime = time(NULL);
 	
 	int i;
 	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
@@ -110,8 +113,6 @@ void *sfs_init(struct fuse_conn_info *conn)
 	/* enter root directory into name table */
 	sprintf(name_table[0].path, "/");
 	name_table[0].st_ino = 0;
-	next_free_mapping++;
-
 
 	/* allocate disk block for root */
 	disk_blocks[0] = ALLOCD;
@@ -128,6 +129,8 @@ void *sfs_init(struct fuse_conn_info *conn)
 	/* hard coded file */
 	//block_write(0, "./0/../0/foo.txt/2");
 	//inode_table[2].stat.st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
+
+	block_write(0, "./0/../0");
 
 	next_free_inode++;
 	next_free_mapping++;
@@ -168,19 +171,20 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 			break;
 		}
 	}
-
 	
-	if(i == MAX_LINK) {
+	if(i == MAX_LINK) {	// path not found
 		memset(statbuf, 0, sizeof(struct stat));
 		statbuf->st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
+		statbuf->st_nlink = 1;
 		statbuf->st_uid = getuid();
 		statbuf->st_gid = getgid();
+		statbuf->st_size = 0;
+		statbuf->st_blocks = 0;
+		statbuf->st_atime = time(NULL);
+		statbuf->st_mtime = time(NULL);
+		statbuf->st_ctime = time(NULL);
 
-		statbuf->st_atime = 5;
-                statbuf->st_ctime = 5;
-                statbuf->st_mtime = 5;
-
-		return retstat;
+		return -ENOENT;
 	}
 	
 	
@@ -211,11 +215,14 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 	/* enter file  into inode table */
         inode_table[next_free_inode].stat.st_mode = mode;
-        inode_table[next_free_inode].stat.st_nlink = 0;
+        inode_table[next_free_inode].stat.st_nlink = 1;
         inode_table[next_free_inode].stat.st_uid = getuid();
         inode_table[next_free_inode].stat.st_gid = getgid();
         inode_table[next_free_inode].stat.st_size = 0;
         inode_table[next_free_inode].stat.st_blocks = 0;
+	inode_table[next_free_inode].stat.st_atime = time(NULL);
+	inode_table[next_free_inode].stat.st_mtime = time(NULL);
+	inode_table[next_free_inode].stat.st_ctime = time(NULL);
 
         int i;
         for(i = 0; i < MAX_FILE_BLOCKS; i++) {
@@ -235,10 +242,10 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	memset(buf, 0, BLOCK_SIZE);
 	block_read(inode_table[0].blocks[0], buf);
 	char *ptr = (char*)buf;	
-	while(ptr != NULL) {	
+	while(*ptr != '\0') {	
 		ptr++;
 	}
-	sprintf(ptr, path);
+	sprintf(ptr, "%s/%i", path, next_free_inode);
 	block_write(inode_table[0].blocks[0], buf);
 
  	next_free_inode++;
