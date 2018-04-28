@@ -524,7 +524,10 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
         int block_offset = offset % BLOCK_SIZE; // offset within starting block
 
 	/* read blocks into aligned buffer  */
-	int read_blocks = (offset + BLOCK_SIZE)/BLOCK_SIZE;	// number of blocks to read (truncated)
+	int read_blocks =
+                ((block_offset) ? 1 : 0) +                                              // first block if partial
+                (size-((block_offset) ? (BLOCK_SIZE-block_offset) : 0))/BLOCK_SIZE +    // full blocks
+                (((offset+size)%BLOCK_SIZE) ? 1 : 0);					// last block if partial
 	void *aligned_buf = malloc(read_blocks*BLOCK_SIZE);	// block-aligned buffer
 	char *pos = (char*)aligned_buf;
 	int i = 0;
@@ -576,7 +579,7 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	void* block_buf = malloc(BLOCK_SIZE);
 	int i;
 	if(offset + size > ((stat->st_size)/BLOCK_SIZE + (((stat->st_size)%BLOCK_SIZE) ? 1 : 0))*BLOCK_SIZE) {
-		int blocks_needed = (offset + size - stat->st_size + BLOCK_SIZE)/BLOCK_SIZE; 	// truncated
+		int blocks_needed = (offset + size)/BLOCK_SIZE - stat->st_size/BLOCK_SIZE - ((stat->st_size%BLOCK_SIZE) ? 1 : 0) + (((offset + size)%BLOCK_SIZE) ? 1 : 0);
 		int blocks_left = blocks_needed;	
 	
 		i = stat->st_blocks;
