@@ -57,12 +57,110 @@
 
 /***** GLOBALS *****/	// all these need to be kept on disk
 inode_t 	inode_table[MAX_NODES];
-int		next_free_inode;
-
 path_map_t	name_table[MAX_LINK];
-int		next_free_mapping;
-
+file_entry_t	open_files[MAX_LINK];
 short		disk_blocks[NUM_BLOCKS];
+
+int root_inode;
+int root_block;
+
+int get_inode() {
+	int i, j;
+	for(i = 0; i < MAX_NODES; i++) {
+		if(inode_table[i].avail == FREE) {
+			inode_table[i].avail = ALLOCD;
+			for(j = 0; j < MAX_FILE_BLOCKS; j++) {
+				inode_table[i].blocks[j] = -1;
+			}
+			return i;
+		}
+	}	
+	return -1;
+}
+
+void free_inode(int st_ino) {
+	inode_table[st_ino].stat.st_nlink--;
+	if(inode_table[st_ino].stat.st_nlink > 0) {
+		return;
+	}
+
+	memset( &(inode_table[st_ino].stat), 0, sizeof(struct stat) );
+	int i;
+	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
+                inode_table[st_ino].blocks[i] = -1;
+        }
+
+	inode_table[st_ino].avail = FREE;
+	return;
+}
+
+int get_mapping() {
+	int i;
+        for(i = 0; i < MAX_LINK; i++) {
+                if(name_table[i].avail == FREE) {
+                        name_table[i].avail = ALLOCD;
+                        return i;
+                }
+        }       
+        return -1;	
+}
+
+void free_mapping(int mapping) {
+	name_table[mapping].avail = FREE;
+	name_table[mapping].st_ino = -1;
+	memset( name_table[mapping].path, 0, MAX_PATH_LEN);
+	return;
+}
+
+int get_block() {
+	int i;
+	for(i = 0; i < NUM_BLOCKS; i++) {
+		if(disk_blocks[i] == FREE) {
+			disk_blocks[i] = ALLOCD;
+			return i;
+		}
+	}
+	return -1;
+}
+
+void free_block(int i) {
+	disk_blocks[i] = FREE;
+	return;
+}
+
+int get_fh() {
+	int i;
+	for(i = 0; i < MAX_LINK; i++) {
+		if(open_files[i].st_ino < 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void free_fh(int fh) {
+	open_files[fh].st_ino = -1;
+	open_files[fh].pos = 0;
+	open_files[fh].refcnt = 0;
+	return;
+}
+
+int path_lookup(const char *path) {
+	int i;
+	for(i = 0; i < MAX_LINK; i++) {
+		if( strcmp(name_table[i].path, path) == 0 ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void removeSubstring(char *s,const char *toremove) {
+  	while( s = strstr(s, toremove) ) {
+    		memmove( s, s+strlen(toremove), 1+strlen(s+strlen(toremove)) );
+	}
+	return;
+}
 
 /**
  * Initialize filesystem
@@ -88,34 +186,40 @@ void *sfs_init(struct fuse_conn_info *conn)
 	memset(inode_table, 0, sizeof(inode_t)*MAX_NODES);
 	memset(name_table,  0, sizeof(path_map_t)*MAX_LINK);
 	memset(disk_blocks, FREE, sizeof(short)*NUM_BLOCKS);
-
-	next_free_inode = 0;
-	next_free_mapping = 0;
+	memset(open_files, 0, sizeof(file_entry_t)*MAX_LINK);
 
 	// how to we check for a pre-existing file system?
 
+
 	/* enter root directory into inode table */
-	inode_table[0].stat.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
-        inode_table[0].stat.st_nlink = 2;
-        inode_table[0].stat.st_uid = getuid();
-        inode_table[0].stat.st_gid = getgid();
-        inode_table[0].stat.st_size = BLOCK_SIZE;
-        inode_table[0].stat.st_blocks = 1;
+	root_inode = get_inode();
+	inode_table[root_inode].stat.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
+        inode_table[root_inode].stat.st_nlink = 2;
+        inode_table[root_inode].stat.st_uid = getuid();
+        inode_table[root_inode].stat.st_gid = getgid();
+        inode_table[root_inode].stat.st_size = BLOCK_SIZE;
+        inode_table[root_inode].stat.st_blocks = 1;
+	inode_table[root_inode].stat.st_atime = time(NULL);
+        inode_table[root_inode].stat.st_mtime = time(NULL);
+        inode_table[root_inode].stat.st_ctime = time(NULL);
 	
 	int i;
 	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
-		inode_table[0].blocks[i] = -1;
+		inode_table[root_inode].blocks[i] = -1;
+	}
+
+	for(i = 0; i < MAX_LINK; i++) {
+		open_files[i].st_ino = -1;
 	}
 
 	/* enter root directory into name table */
-	sprintf(name_table[0].path, "/");
-	name_table[0].st_ino = 0;
-	next_free_mapping++;
-
+	int root_mapping = get_mapping();
+	sprintf(name_table[root_mapping].path, "/");
+	name_table[root_mapping].st_ino = root_inode;
 
 	/* allocate disk block for root */
-	disk_blocks[0] = ALLOCD;
-	inode_table[0].blocks[0] = 0;
+	root_block = get_block();
+	inode_table[root_inode].blocks[0] = root_block;
 
 	/* 
  	 * add . and .. as entries to root the syntax for directory data will
@@ -129,8 +233,8 @@ void *sfs_init(struct fuse_conn_info *conn)
 	//block_write(0, "./0/../0/foo.txt/2");
 	//inode_table[2].stat.st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
 
-	next_free_inode++;
-	next_free_mapping++;
+	block_write(0, "./0/../0");
+
     	return SFS_DATA;
 }
 
@@ -161,30 +265,25 @@ int sfs_getattr(const char *path, struct stat *statbuf)
     	char fpath[PATH_MAX];
     	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);
 	
-	/* path name lookup */
-	int i;
-	for(i = 0; i < MAX_LINK; i++) {
-		if( strcmp(path, name_table[i].path) == 0 ) {
-			break;
-		}
-	}
-
+	int mapping = path_lookup(path);
 	
-	if(i == MAX_LINK) {
+	if(mapping < 0) {	// path not found
 		memset(statbuf, 0, sizeof(struct stat));
 		statbuf->st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
+		statbuf->st_nlink = 1;
 		statbuf->st_uid = getuid();
 		statbuf->st_gid = getgid();
+		statbuf->st_size = 0;
+		statbuf->st_blocks = 0;
+		statbuf->st_atime = time(NULL);
+		statbuf->st_mtime = time(NULL);
+		statbuf->st_ctime = time(NULL);
 
-		statbuf->st_atime = 5;
-                statbuf->st_ctime = 5;
-                statbuf->st_mtime = 5;
-
-		return retstat;
+		return -ENOENT;
 	}
 	
 	
-	memcpy( statbuf, &(inode_table[i].stat), sizeof(struct stat) );
+	memcpy( statbuf, &(inode_table[mapping].stat), sizeof(struct stat) );
 
     	return retstat;
 }
@@ -206,25 +305,43 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	int retstat = 0;
    	log_msg("\nsfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n", path, mode, fi);
 
+	if(path_lookup(path) > 0) {
+		return -EEXIST;
+	}
+
 	/* set file handle */
-	fi->fh = next_free_inode;
+	//memset(fi, 0, sizeof(struct fuse_file_info));
+	fi->fh = get_fh();
+	if(fi->fh < 0) {
+		return -EMFILE;
+	}
+
+	int inode = get_inode();
+
+	open_files[fi->fh].refcnt = 1;
+	open_files[fi->fh].st_ino = inode;
+	open_files[fi->fh].pos = 0;
 
 	/* enter file  into inode table */
-        inode_table[next_free_inode].stat.st_mode = mode;
-        inode_table[next_free_inode].stat.st_nlink = 0;
-        inode_table[next_free_inode].stat.st_uid = getuid();
-        inode_table[next_free_inode].stat.st_gid = getgid();
-        inode_table[next_free_inode].stat.st_size = 0;
-        inode_table[next_free_inode].stat.st_blocks = 0;
-
-        int i;
-        for(i = 0; i < MAX_FILE_BLOCKS; i++) {
-                inode_table[next_free_inode].blocks[i] = -1;
-        }
+        inode_table[inode].stat.st_mode = mode;
+        inode_table[inode].stat.st_nlink = 1;
+        inode_table[inode].stat.st_uid = getuid();
+        inode_table[inode].stat.st_gid = getgid();
+        inode_table[inode].stat.st_size = 0;
+        inode_table[inode].stat.st_blocks = 0;
+	inode_table[inode].stat.st_atime = time(NULL);
+	inode_table[inode].stat.st_mtime = time(NULL);
+	inode_table[inode].stat.st_ctime = time(NULL);
 
         /* enter file into name table */
-        sprintf(name_table[next_free_mapping].path, path);
-        name_table[next_free_mapping].st_ino = next_free_inode;
+	int mapping = get_mapping();        
+	if(mapping < 0) {
+		free_inode(inode);
+		free_fh(fi->fh);
+		return -ENOMEM;
+	}
+	sprintf(name_table[mapping].path, path);
+        name_table[mapping].st_ino = inode;
 
         /* allocate disk block for file */
         //disk_blocks[0] = ALLOCD;
@@ -233,26 +350,50 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	/* enter file into root directory  */
 	void *buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
-	block_read(inode_table[0].blocks[0], buf);
+	block_read(inode_table[root_inode].blocks[0], buf);
 	char *ptr = (char*)buf;	
-	while(ptr != NULL) {	
+	while(*ptr != '\0') {	
 		ptr++;
 	}
-	sprintf(ptr, path);
-	block_write(inode_table[0].blocks[0], buf);
+	sprintf(ptr, "%s/%i", path, inode);
+	block_write(inode_table[root_inode].blocks[0], buf);
+	inode_table[root_inode].stat.st_nlink++;
 
- 	next_free_inode++;
-	next_free_mapping++;
     	return retstat;
 }
 
 /** Remove a file */
 int sfs_unlink(const char *path)
 {
-    int retstat = 0;
-    log_msg("sfs_unlink(path=\"%s\")\n", path);
+	int retstat = 0;
+    	log_msg("sfs_unlink(path=\"%s\")\n", path);
+
+	/* path lookup  */
+	int mapping = path_lookup(path);
+	if(mapping < 0) {
+		return -ENOENT;
+	}	
+
+	/* update root directory */
+	char *entry = malloc(MAX_PATH_LEN);
+	memset(entry, 0, MAX_PATH_LEN);
+	sprintf(entry, "%s/%i", path, name_table[mapping].st_ino);
+	void *buf = malloc(BLOCK_SIZE);
+	memset(buf, 0, BLOCK_SIZE);
+	block_read(inode_table[root_inode].blocks[0], buf);	
+
+	removeSubstring((char*)buf, entry);
+	memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
+
+
+	block_write(inode_table[root_inode].blocks[0], buf);
+	inode_table[root_inode].stat.st_nlink--;
+
+	/* update tables  */
+	free_inode(name_table[mapping].st_ino);
+	free_mapping(mapping);
  
-    return retstat;
+    	return retstat;
 }
 
 /** File open operation
@@ -267,12 +408,40 @@ int sfs_unlink(const char *path)
  */
 int sfs_open(const char *path, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_open(path\"%s\", fi=0x%08x)\n",
-	    path, fi);
+    	int retstat = 0;
+    	log_msg("\nsfs_open(path\"%s\", fi=0x%08x)\n", path, fi);
 
+	int mapping = path_lookup(path);
+	if(mapping < 0) {
+		return -ENOENT;
+	}
+
+	/* test permissions against mode  */
+	int gid = getgid();
+	int uid = getuid();
+	struct stat *stats = &(inode_table[name_table[mapping].st_ino].stat);
+
+	if(access(path, R_OK) == EACCES) {
+		return -EACCES;
+	}
+	
+	if( S_ISDIR(stats->st_mode) ) {
+		return -EISDIR;
+	}
+
+	/* allocate file handle */	
+	retstat = get_fh();
+	if(retstat < 0) {
+		return -ENOMEM;
+	} else {
+		fi->fh = retstat;
+	}
+
+	open_files[fi->fh].refcnt = 1;
+	open_files[fi->fh].st_ino = name_table[mapping].st_ino; 
+	open_files[fi->fh].pos = 0;	
     
-    return retstat;
+    	return retstat;
 }
 
 /** Release an open file
@@ -291,12 +460,12 @@ int sfs_open(const char *path, struct fuse_file_info *fi)
  */
 int sfs_release(const char *path, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_release(path=\"%s\", fi=0x%08x)\n",
-	  path, fi);
-    
+	int retstat = 0;
+    	log_msg("\nsfs_release(path=\"%s\", fi=0x%08x)\n", path, fi);
+    	
+	free_fh(fi->fh);	
 
-    return retstat;
+	return retstat;
 }
 
 /** Read data from an open file
@@ -312,12 +481,48 @@ int sfs_release(const char *path, struct fuse_file_info *fi)
  */
 int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
+	int retstat = 0;
+    	log_msg("\nsfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
 
-   
-    return retstat;
+	// check range
+        if(fi->fh < 0 || fi->fh > MAX_LINK-1) {
+                return -EBADF;
+        }
+
+        // check if open
+        if(open_files[fi->fh].st_ino < 0) {
+                return -EBADF;
+        }
+
+        struct stat *stat = &(inode_table[open_files[fi->fh].st_ino].stat);
+
+        if(offset >= stat->st_size) {
+                return EOF;
+        }	
+
+	// read would go beyong range of file
+	if(offset + size > stat->st_size) {
+		size = stat->st_size - offset;
+	}
+
+	/* calculate starting block */
+	int start_block = offset/BLOCK_SIZE;    // truncated 
+        int block_offset = offset % BLOCK_SIZE; // offset within starting block
+
+	/* read blocks into aligned buffer  */
+	int read_blocks = (offset + BLOCK_SIZE)/BLOCK_SIZE;	// number of blocks to read (truncated)
+	void *aligned_buf = malloc(read_blocks*BLOCK_SIZE);	// block-aligned buffer
+	char *pos = (char*)aligned_buf;
+	int i = 0;
+	while(read_blocks > 0) {
+		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+                pos += BLOCK_SIZE;
+		read_blocks--;
+		i++;
+	}
+
+	memcpy(buf, aligned_buf, size);
+    	return size;
 }
 
 /** Write data to an open file
@@ -328,15 +533,88 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
  *
  * Changed in version 2.2
  */
-int sfs_write(const char *path, const char *buf, size_t size, off_t offset,
-	     struct fuse_file_info *fi)
+int sfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n",
-	    path, buf, size, offset, fi);
-    
-    
-    return retstat;
+	int retstat = 0;
+    	log_msg("\nsfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
+
+	// check range
+	if(fi->fh < 0 || fi->fh > MAX_LINK-1) {
+		return -EBADF;
+	}
+
+	// check if open
+	if(open_files[fi->fh].st_ino < 0) {
+		return -EBADF;
+	}
+
+	struct stat *stat = &(inode_table[open_files[fi->fh].st_ino].stat);
+
+	if(offset > stat->st_size) {
+		return 0;
+	}
+
+	// calculate starting block
+	int start_block = offset/BLOCK_SIZE; 	// truncated 
+	int block_offset = offset % BLOCK_SIZE;	// offset within starting block
+
+	// file needs to be resized
+	void* block_buf = malloc(BLOCK_SIZE);
+	int i;
+	if(offset + size > stat->st_size) {
+		int blocks_needed = (offset + size - stat->st_size + BLOCK_SIZE)/BLOCK_SIZE; 	// truncated
+		int blocks_left = blocks_needed;	
+	
+		i = stat->st_blocks;
+		int block;
+		while(blocks_left > 0) {
+			block = get_block();
+			if(block < 0) {
+				return -ENOMEM;
+			} else {
+				block_read(block, block_buf);
+				memset(block_buf, 0, BLOCK_SIZE);
+				block_write(block, block_buf);
+			}		
+	
+			if(i > MAX_FILE_BLOCKS) {
+				return -EFBIG;
+			}
+			
+			inode_table[open_files[fi->fh].st_ino].blocks[i] = block;
+			i++;
+			blocks_left--;
+			stat->st_blocks++;
+		}
+
+		stat->st_size += size;
+	}
+
+	/* load file blocks being written to into continuous buffer */
+	int write_blocks = (size + BLOCK_SIZE)/BLOCK_SIZE;
+	void *cont_buffer = malloc(write_blocks*BLOCK_SIZE);
+	memset(cont_buffer, 0, write_blocks*BLOCK_SIZE);
+	char *pos = (char*)cont_buffer;
+		
+	for(i = 0; i < write_blocks; i++) {
+		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		pos += BLOCK_SIZE;
+	}	
+	
+	/* write to continuous buffer */
+	memcpy(cont_buffer, buf, size);
+
+	/* write back to disk */
+	pos = (char*)cont_buffer;	
+	for(i = 0; i < write_blocks; i++) {
+                block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		pos += BLOCK_SIZE;
+        }
+
+	free(block_buf);
+	free(cont_buffer);
+
+	return size;
 }
 
 
@@ -402,13 +680,13 @@ int sfs_opendir(const char *path, struct fuse_file_info *fi)
  */
 int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi)
 {
-    	int retstat = 0, st_ino = -1;
-
-	if( strcmp(path, "/") == 0 ) {
-		st_ino = 0;
-	} else {
-		st_ino = fi->fh;	// make sure this is set in another funtion
+    	int retstat = 0, mapping, st_ino;
+	mapping = path_lookup(path);
+	if(mapping < 0) {
+		return -ENOENT;
 	}
+	
+	st_ino = name_table[mapping].st_ino;
 
 	char *entry_list = malloc(BLOCK_SIZE), *tok;
 	block_read(inode_table[st_ino].blocks[0] , entry_list);
