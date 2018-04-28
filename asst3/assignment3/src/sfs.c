@@ -575,7 +575,7 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	// file needs to be resized
 	void* block_buf = malloc(BLOCK_SIZE);
 	int i;
-	if(offset + size > stat->st_size) {
+	if(offset + size > ((stat->st_size)/BLOCK_SIZE + (((stat->st_size)%BLOCK_SIZE) ? 1 : 0))*BLOCK_SIZE) {
 		int blocks_needed = (offset + size - stat->st_size + BLOCK_SIZE)/BLOCK_SIZE; 	// truncated
 		int blocks_left = blocks_needed;	
 	
@@ -591,9 +591,11 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
  				* I don't think the blocks need to be zeroed out, they	*
  				* can probably just be added in metadata.		*
  				* ******************************************************/
+				/*
 				block_read(block, block_buf);
 				memset(block_buf, 0, BLOCK_SIZE);
 				block_write(block, block_buf);
+				*/
 			}		
 	
 			if(i > MAX_FILE_BLOCKS) {
@@ -606,11 +608,13 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 			stat->st_blocks++;
 		}
 
-		stat->st_size += size;
 	}
 
 	/* load file blocks being written to into continuous buffer */
-	int write_blocks = (size + BLOCK_SIZE)/BLOCK_SIZE;
+	int write_blocks = 								
+		((block_offset) ? 1 : 0) + 						// first block if partial
+		(size-((block_offset) ? (BLOCK_SIZE-block_offset) : 0))/BLOCK_SIZE + 	// full blocks
+		(((offset+size)%BLOCK_SIZE) ? 1 : 0);					// last block if partial
 	void *cont_buffer = malloc(write_blocks*BLOCK_SIZE);
 	memset(cont_buffer, 0, write_blocks*BLOCK_SIZE);
 	char *pos = (char*)cont_buffer;
@@ -621,13 +625,16 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
  	* I think only the first block actually	*
  	* needs to be read in.  		*
  	* **************************************/
+	/*
 	for(i = 0; i < write_blocks; i++) {
 		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
 		pos += BLOCK_SIZE;
-	}	
+	}
+	*/
+	block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block], cont_buffer);	
 	
 	/* write to continuous buffer */
-	memcpy(cont_buffer, buf, size);
+	memcpy(cont_buffer + block_offset, buf, size);
 
 	/* write back to disk */
 	pos = (char*)cont_buffer;	
@@ -635,6 +642,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
                 block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
 		pos += BLOCK_SIZE;
         }
+
+	stat->st_size += size;
 
 	free(block_buf);
 	free(cont_buffer);
