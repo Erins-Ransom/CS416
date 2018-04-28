@@ -234,6 +234,7 @@ void *sfs_init(struct fuse_conn_info *conn)
 	//inode_table[2].stat.st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
 
 	block_write(0, "./0/../0");
+	inode_table[root_inode].stat.st_size = 9;
 
     	return SFS_DATA;
 }
@@ -348,15 +349,28 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         //inode_table[0].blocks[0] = 0;
 
 	/* enter file into root directory  */
+	int i = 0;
 	void *buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
-	block_read(inode_table[root_inode].blocks[0], buf);
+	block_read(inode_table[root_inode].blocks[i], buf);
 	char *ptr = (char*)buf;	
 	while(*ptr != '\0') {	
 		ptr++;
+		// check to make sure we have not gone off the end of the block
+		// and read in a new block if needed
+		if ((void *)ptr >= buf + BLOCK_SIZE) {
+			block_read(inode_table[root_inode].blocks[++i], buf);
+			ptr = (char*)buf;
+		}
 	}
+	/************************************************
+ 	* Need to check if the new entry will exceed 	*
+ 	* the buffer and require a new block to be 	*
+ 	* allocated.					*
+ 	* **********************************************/
+
 	sprintf(ptr, "%s/%i", path, inode);
-	block_write(inode_table[root_inode].blocks[0], buf);
+	block_write(inode_table[root_inode].blocks[i], buf);
 	inode_table[root_inode].stat.st_nlink++;
 
     	return retstat;
@@ -521,7 +535,7 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 		i++;
 	}
 
-	memcpy(buf, aligned_buf, size);
+	memcpy(buf, aligned_buf + block_offset, size);
     	return size;
 }
 
@@ -572,6 +586,11 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 			if(block < 0) {
 				return -ENOMEM;
 			} else {
+
+				/********************************************************
+ 				* I don't think the blocks need to be zeroed out, they	*
+ 				* can probably just be added in metadata.		*
+ 				* ******************************************************/
 				block_read(block, block_buf);
 				memset(block_buf, 0, BLOCK_SIZE);
 				block_write(block, block_buf);
@@ -596,6 +615,12 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	memset(cont_buffer, 0, write_blocks*BLOCK_SIZE);
 	char *pos = (char*)cont_buffer;
 		
+
+	/****************************************
+ 	* This seems a little unnecessary, 	*
+ 	* I think only the first block actually	*
+ 	* needs to be read in.  		*
+ 	* **************************************/
 	for(i = 0; i < write_blocks; i++) {
 		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
 		pos += BLOCK_SIZE;
