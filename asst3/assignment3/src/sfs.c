@@ -69,7 +69,7 @@ int get_inode() {
 	for(i = 0; i < MAX_NODES; i++) {
 		if(inode_table[i].avail == FREE) {
 			inode_table[i].avail = ALLOCD;
-			for(j = 0; j < MAX_FILE_BLOCKS; j++) {
+			for(j = 0; j < 12; j++) {
 				inode_table[i].blocks[j] = -1;
 			}
 			return i;
@@ -85,9 +85,45 @@ void free_inode(int st_ino) {
 	}
 
 	memset( &(inode_table[st_ino].stat), 0, sizeof(struct stat) );
-	int i;
-	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
-                inode_table[st_ino].blocks[i] = -1;
+	int i, j;
+	
+	char buf1[BLOCK_SIZE];
+	char buf2[BLOCK_SIZE];
+	short * buf_mask1 = (short *)buf1;
+	short * buf_mask2 = (short *)buf2;
+
+	if (inode_table[st_ino].blocks[11] > 0) {
+		block_read(inode_table[st_ino].blocks[11], (void *)buf1);
+		for (i = 0; i < 10; i++) {
+			if (buf_mask1[i] > 0) {
+				block_read(buf_mask1[i], buf2);
+				for (j = 0; j < 100; j++) {
+					if (buf_mask2[j] > 0) {
+						disk_blocks[buf_mask2[j]] = FREE;
+					} else { break; }
+				}
+				disk_blocks[buf_mask1[i]] = FREE;
+			} else { break; }
+		}
+		disk_blocks[inode_table[st_ino].blocks[11]] = FREE;
+
+	}
+
+	if (inode_table[st_ino].blocks[10] > 0) {
+		block_read(inode_table[st_ino].blocks[10], (void *)buf1);
+		for (i = 0; i < 100; i++) {
+			if (buf_mask1[i] > 0) {
+				disk_blocks[buf_mask1[i]] = FREE;
+			} else { break; }
+		}
+		disk_blocks[inode_table[st_ino].blocks[10]] = FREE;
+	}
+
+	for(i = 0; i < 10; i++) {
+		if (inode_table[st_ino].blocks > 0) {
+			disk_blocks[inode_table[st_ino].blocks[i]] = FREE;
+                	inode_table[st_ino].blocks[i] = -1;
+		} else { break; }
         }
 
 	inode_table[st_ino].avail = FREE;
@@ -112,8 +148,8 @@ void free_mapping(int mapping) {
 	return;
 }
 
-int get_block() {
-	int i;
+short get_block() {
+	short i;
 	for(i = 0; i < NUM_BLOCKS; i++) {
 		if(disk_blocks[i] == FREE) {
 			disk_blocks[i] = ALLOCD;
@@ -121,6 +157,75 @@ int get_block() {
 		}
 	}
 	return -1;
+}
+
+short get_block_index(inode_t * inode, short block_num) {
+	
+	char buf[BLOCK_SIZE];
+	short sub_index;
+
+	if (block_num < 10) {
+		return inode->blocks[block_num];
+	} else if (block_num < 100) {
+		block_read(inode->blocks[10], (void *)buf);
+		return ((short *)buf)[block_num-10];
+	} else if (block_num < 1110) {
+		block_read(inode->blocks[11], buf);
+		sub_index = ((short *)buf)[(block_num-110)/100];
+		block_read(sub_index, (void *)buf);
+		return ((short *)buf)[(block_num-110)%100];
+	}
+
+	return -1;
+}
+
+void set_block_index(inode_t * inode, short block_num, short index) {
+
+        char buf[BLOCK_SIZE];
+	short sub_index,i;
+
+        if (block_num < 10) {
+                inode->blocks[block_num] = index;
+
+        } else if (block_num < 100) {
+		if (inode->blocks[10] < 0) {
+			inode->blocks[10] = get_block();
+			block_read(inode->blocks[10], (void *)buf);
+			for (i = 0; i < 100; i++) {
+				((short *)buf)[i] = -1;
+			}
+		} else {
+                	block_read(inode->blocks[10], (void *)buf);
+		}
+                ((short *)buf)[block_num-10] = index;
+		block_write(inode->blocks[10], buf);
+
+        } else if (block_num <= 1110) {
+                if (inode->blocks[11] < 0) {
+                        inode->blocks[11] = get_block();
+                        for (i = 0; i < 10; i++) {
+                                ((short *)buf)[i] = -1;
+                        }
+			block_write(inode->blocks[11], buf);
+		} else {
+                	block_read(inode->blocks[11], buf);
+		}
+
+                if (((short *)buf)[(block_num-110)/100] < 0) {
+                        sub_index = ((short *)buf)[(block_num-110)/100] = get_block();
+			block_write(inode->blocks[11], buf);
+                        for (i = 0; i < 100; i++) {
+                                ((short *)buf)[i] = -1;
+                        }
+		} else {
+			sub_index = ((short *)buf)[(block_num-110)/100];
+               		block_read(sub_index, buf);
+		}
+
+                ((short *)buf)[(block_num-110)%100] = index;
+		block_write(sub_index, buf);
+        }
+
 }
 
 void free_block(int i) {
@@ -204,7 +309,7 @@ void *sfs_init(struct fuse_conn_info *conn)
         inode_table[root_inode].stat.st_ctime = time(NULL);
 	
 	int i;
-	for(i = 0; i < MAX_FILE_BLOCKS; i++) {
+	for(i = 0; i < 12; i++) {
 		inode_table[root_inode].blocks[i] = -1;
 	}
 
@@ -219,7 +324,8 @@ void *sfs_init(struct fuse_conn_info *conn)
 
 	/* allocate disk block for root */
 	root_block = get_block();
-	inode_table[root_inode].blocks[0] = root_block;
+	set_block_index(&(inode_table[root_inode]), 0, root_block);
+	// inode_table[root_inode].blocks[0] = root_block;
 
 	/* 
  	 * add . and .. as entries to root the syntax for directory data will
@@ -352,14 +458,16 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	int i = 0;
 	void *buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
-	block_read(inode_table[root_inode].blocks[i], buf);
+	block_read(get_block_index(&(inode_table[root_inode]), i), buf);
+	// block_read(inode_table[root_inode].blocks[i], buf);
 	char *ptr = (char*)buf;	
 	while(*ptr != '\0') {	
 		ptr++;
 		// check to make sure we have not gone off the end of the block
 		// and read in a new block if needed
 		if ((void *)ptr >= buf + BLOCK_SIZE) {
-			block_read(inode_table[root_inode].blocks[++i], buf);
+			block_read(get_block_index(&(inode_table[root_inode]),++i), buf);
+			// block_read(inode_table[root_inode].blocks[++i], buf);
 			ptr = (char*)buf;
 		}
 	}
@@ -370,7 +478,8 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
  	* **********************************************/
 
 	sprintf(ptr, "%s/%i", path, inode);
-	block_write(inode_table[root_inode].blocks[i], buf);
+	block_write(get_block_index(&(inode_table[root_inode]), i), buf);
+	// block_write(inode_table[root_inode].blocks[i], buf);
 	inode_table[root_inode].stat.st_nlink++;
 
     	return retstat;
@@ -532,7 +641,8 @@ int sfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse
 	char *pos = (char*)aligned_buf;
 	int i = 0;
 	while(read_blocks > 0) {
-		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		block_read(get_block_index(&(inode_table[open_files[fi->fh].st_ino]), start_block+i), (void *)pos);
+		// block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
                 pos += BLOCK_SIZE;
 		read_blocks--;
 		i++;
@@ -605,7 +715,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 				return -EFBIG;
 			}
 			
-			inode_table[open_files[fi->fh].st_ino].blocks[i] = block;
+			set_block_index(&(inode_table[open_files[fi->fh].st_ino]), i, block);
+			// inode_table[open_files[fi->fh].st_ino].blocks[i] = block;
 			i++;
 			blocks_left--;
 			stat->st_blocks++;
@@ -634,7 +745,9 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 		pos += BLOCK_SIZE;
 	}
 	*/
-	block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block], cont_buffer);	
+
+	block_read(get_block_index(&(inode_table[open_files[fi->fh].st_ino]), start_block), cont_buffer);
+	// block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block], cont_buffer);	
 	
 	/* write to continuous buffer */
 	memcpy(cont_buffer + block_offset, buf, size);
@@ -642,7 +755,8 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	/* write back to disk */
 	pos = (char*)cont_buffer;	
 	for(i = 0; i < write_blocks; i++) {
-                block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
+		block_write(get_block_index(&(inode_table[open_files[fi->fh].st_ino]), start_block+i), (void *)pos);
+                // block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
 		pos += BLOCK_SIZE;
         }
 

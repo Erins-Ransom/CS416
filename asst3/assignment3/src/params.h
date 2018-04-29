@@ -41,7 +41,7 @@
 
 /***** MACROS *****/
 #define MAX_PATH_LEN 128
-#define MAX_FILE_BLOCKS 128
+#define MAX_FILE_BLOCKS 1110
 
 /*
  * mapping of file path to
@@ -62,7 +62,7 @@ typedef struct path_map {
 typedef struct inode {
 	short avail;			// 0 if free, 1 if not
 	struct stat stat;		// metadata
-	short blocks[MAX_FILE_BLOCKS];	// list of block numbers
+	short blocks[12];		// list of block numbers, last 2 are indirect (single and double respectively)
 } inode_t;
 
 /*
