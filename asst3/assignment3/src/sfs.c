@@ -634,23 +634,31 @@ int sfs_unlink(const char *path)
 		return -ENOENT;
 	}	
 
-	/* update root directory */
+	/* update parent directory */
 	char *entry = malloc(MAX_PATH_LEN);
 	memset(entry, 0, MAX_PATH_LEN);
-	sprintf(entry, "%s/%i", path, name_table[mapping].st_ino);
+	char name[255];
+	memset(name, 0, 255);
 	void *buf = malloc(BLOCK_SIZE);
-	memset(buf, 0, BLOCK_SIZE);
-	block_read(inode_table[root_inode].blocks[0], buf);	
+        memset(buf, 0, BLOCK_SIZE);
+	char cwd_path[255];
+	memset(cwd_path, 0, 255);
 
+	get_name(path, name);
+	sprintf(entry, "/%s/%i", name, name_table[mapping].st_ino);	// assemble directory entry to be removed
+	
+	get_cwd_path(path, cwd_path);
+	int cwd_mapping = path_lookup(cwd_path);
+	cwd_inode = name_table[cwd_mapping].st_ino;
+
+	block_read(inode_table[cwd_inode].blocks[0], buf);	
 	removeSubstring((char*)buf, entry);
 	memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
-
-
-	block_write(inode_table[root_inode].blocks[0], buf);
-	inode_table[root_inode].stat.st_nlink--;
+	block_write(inode_table[cwd_inode].blocks[0], buf);
+	inode_table[cwd_inode].stat.st_nlink--;
 
 	/* update tables  */
-	free_inode(name_table[mapping].st_ino);
+	free_inode(name_table[mapping].st_ino);		// Eric please change this to your double indirection thing
 	free_mapping(mapping);
  
     	return retstat;
