@@ -22,6 +22,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <time.h>
+#include <stdint.h>
+#include <sys/mman.h>
 
 #ifdef HAVE_SYS_XATTR_H
 #include <sys/xattr.h>
@@ -54,8 +56,10 @@
 #define NUM_BLOCKS 2048
 #define ALLOCD 1
 #define FREE 0
+#define KEY 0xA7C4144BEF51B825
 
 /***** GLOBALS *****/	// all these need to be kept on disk
+int64_t         key_val;
 inode_t 	inode_table[MAX_NODES];
 path_map_t	name_table[MAX_LINK];
 file_entry_t	open_files[MAX_LINK];
@@ -63,6 +67,7 @@ short		disk_blocks[NUM_BLOCKS];
 
 int root_inode;
 int root_block;
+int system_block;
 
 int get_inode() {
 	int i, j;
@@ -287,14 +292,70 @@ void *sfs_init(struct fuse_conn_info *conn)
 	/* set diskfile based on sfs_state */
 	disk_open((SFS_DATA)->diskfile);
 
+	size_t reserve = sizeof(int64_t)+sizeof(inode_table)+sizeof(name_table)+sizeof(disk_blocks)+sizeof(open_files)+2*sizeof(int);
+        int reserve_blocks = (reserve + BLOCK_SIZE)/BLOCK_SIZE;
+
+	int i;
+	int new_mount = 1;                      // 1 if file never mounted, 0 if re-mounting previous file system
+        void *buf = malloc(BLOCK_SIZE);
+        int64_t key_val = 0;
+        for(i = 0; i < NUM_BLOCKS; i++) {
+                block_read(NUM_BLOCKS-i, buf);
+                if( *((int64_t*)buf) == KEY) {
+                        new_mount = 0;
+                        system_block = NUM_BLOCKS-i;
+                        break;  
+                }       
+        }
+        free(buf);	
+
+	if(i == NUM_BLOCKS) {	// key not found
+		system_block = NUM_BLOCKS - reserve_blocks;
+	} else {		// key found
+		system_block = NUM_BLOCKS - i;
+	}
+
+	if(new_mount == 0) {
+        	buf = malloc(reserve_blocks*BLOCK_SIZE);
+        	char *pos = (char*)buf;
+	
+		int i;
+                for(i = 0; i < reserve_blocks; i++) {
+                        block_read(system_block+i, buf+i*BLOCK_SIZE);
+                }
+
+        	memcpy(&key_val, pos, sizeof(int64_t));
+        	pos += sizeof(int64_t);
+
+        	memcpy(inode_table, pos, sizeof(inode_table));
+        	pos += sizeof(inode_table);
+
+	        memcpy(name_table, pos, sizeof(name_table));
+       		 pos += sizeof(name_table);
+
+        	memcpy(disk_blocks, pos, sizeof(disk_blocks));
+        	pos += sizeof(disk_blocks);
+
+        	memcpy(open_files, pos, sizeof(open_files));
+        	pos += sizeof(open_files);
+
+        	memcpy(&root_inode, pos, sizeof(int));
+        	pos += sizeof(int);
+
+        	memcpy(&root_block, pos, sizeof(int));
+
+        	free(buf);	
+		return SFS_DATA;
+	}
+
+	/* resize file to 16MB   */
+	truncate((SFS_DATA)->diskfile, NUM_BLOCKS*BLOCK_SIZE);	
+
 	/* zero out all tables (add check for pre existing file system) */
 	memset(inode_table, 0, sizeof(inode_t)*MAX_NODES);
 	memset(name_table,  0, sizeof(path_map_t)*MAX_LINK);
 	memset(disk_blocks, FREE, sizeof(short)*NUM_BLOCKS);
 	memset(open_files, 0, sizeof(file_entry_t)*MAX_LINK);
-
-	// how to we check for a pre-existing file system?
-
 
 	/* enter root directory into inode table */
 	root_inode = get_inode();
@@ -308,7 +369,6 @@ void *sfs_init(struct fuse_conn_info *conn)
         inode_table[root_inode].stat.st_mtime = time(NULL);
         inode_table[root_inode].stat.st_ctime = time(NULL);
 	
-	int i;
 	for(i = 0; i < 12; i++) {
 		inode_table[root_inode].blocks[i] = -1;
 	}
@@ -331,14 +391,10 @@ void *sfs_init(struct fuse_conn_info *conn)
  	 * add . and .. as entries to root the syntax for directory data will
  	 * be <file name>/<inode #>/<other file name>/<other inode #>/...
  	 */
-	void *buf = malloc(BLOCK_SIZE);
+	buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
 	block_write(0, buf);
 	
-	/* hard coded file */
-	//block_write(0, "./0/../0/foo.txt/2");
-	//inode_table[2].stat.st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
-
 	block_write(0, "./0/../0");
 	inode_table[root_inode].stat.st_size = 9;
 
@@ -354,9 +410,43 @@ void *sfs_init(struct fuse_conn_info *conn)
  */
 void sfs_destroy(void *userdata)
 {	
-	/* must write all tables to persistent memory */
+	/* write all tables to persistent memory */
+	
+	key_val = KEY;
+        size_t reserve = sizeof(int64_t)+sizeof(inode_table)+sizeof(name_table)+sizeof(disk_blocks)+sizeof(open_files)+2*sizeof(int); 
+	int reserve_blocks = (reserve + BLOCK_SIZE)/BLOCK_SIZE;
+	void *buf = malloc(reserve_blocks*BLOCK_SIZE);
+	char *pos = (char*)buf;
 
+        memcpy(pos, &key_val, sizeof(int64_t));
+        pos += sizeof(int64_t);
+        
+        memcpy(pos, inode_table, sizeof(inode_table));
+        pos += sizeof(inode_table);
+             
+        memcpy(pos, name_table, sizeof(name_table));
+        pos += sizeof(name_table); 
+    
+        memcpy(pos, disk_blocks, sizeof(disk_blocks));
+        pos += sizeof(disk_blocks);
+    
+        memcpy(pos, open_files, sizeof(open_files));
+        pos += sizeof(open_files);
+    
+        memcpy(pos, &root_inode, sizeof(int));
+        pos += sizeof(int);
+
+        memcpy(pos, &root_block, sizeof(int));
+
+	int i;
+	for(i = 0; i < reserve_blocks; i++) {
+		block_write(system_block+i, buf+i*BLOCK_SIZE);
+	}
+
+	free(buf);
+	
 	disk_close();
+
 	log_msg("\nsfs_destroy(userdata=0x%08x)\n", userdata);
 }
 
@@ -370,7 +460,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 {
 	int retstat = 0;
     	char fpath[PATH_MAX];
-    	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);
+    	log_msg("\nsfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, statbuf);	// this segfaults for some reason
 	
 	int mapping = path_lookup(path);
 	
