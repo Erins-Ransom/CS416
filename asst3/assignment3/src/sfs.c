@@ -173,7 +173,7 @@ short get_block_index(inode_t * inode, short block_num) {
 
 	if (block_num < 10) {
 		return inode->blocks[block_num];
-	} else if (block_num < 100) {
+	} else if (block_num < 110) {
 		block_read(inode->blocks[10], (void *)buf);
 		return ((short *)buf)[block_num-10];
 	} else if (block_num < 1110) {
@@ -194,7 +194,7 @@ void set_block_index(inode_t * inode, short block_num, short index) {
         if (block_num < 10) {
                 inode->blocks[block_num] = index;
 
-        } else if (block_num < 100) {
+        } else if (block_num < 110) {
 		if (inode->blocks[10] < 0) {
 			inode->blocks[10] = get_block();
 			block_read(inode->blocks[10], (void *)buf);
