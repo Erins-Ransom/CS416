@@ -67,7 +67,9 @@ short		disk_blocks[NUM_BLOCKS];
 
 int root_inode;
 int root_block;
+
 int system_block;
+int cwd_inode;	// holds inode of the current working directory
 
 int get_inode() {
 	int i, j;
@@ -265,6 +267,48 @@ int path_lookup(const char *path) {
 	return -1;
 }
 
+int get_cwd_path(const char *path, char *buf) {
+	if(strcmp(path, "/") == 0) {
+		sprintf(buf, "/");
+		return 0;
+	}
+
+	int i, pos = -1;
+	for(i = 0; i < strlen(path); i++) {
+		if(path[i] == '/') {
+			pos = i;
+		}
+	}
+	if(pos < 0) {
+		return -1;
+	} else if(pos == 0) {
+		sprintf(buf, "/");
+                return 0;
+	}
+
+	strncpy(buf, path, pos);
+	return 0;
+}
+
+int get_name(const char *path, char *buf) {
+        if(strcmp(path, "/") == 0) {
+                sprintf(buf, "/");
+                return 0;
+        }
+
+        int i, pos = -1;
+        for(i = 0; i < strlen(path); i++) {
+                if(path[i] == '/') {
+                        pos = i;
+                }
+        }
+        if(pos < 0) {
+                return -1;
+        }
+
+        strncpy(buf, path+pos+1, strlen(path)-pos);
+}
+
 void removeSubstring(char *s,const char *toremove) {
   	while( s = strstr(s, toremove) ) {
     		memmove( s, s+strlen(toremove), 1+strlen(s+strlen(toremove)) );
@@ -345,6 +389,7 @@ void *sfs_init(struct fuse_conn_info *conn)
         	memcpy(&root_block, pos, sizeof(int));
 
         	free(buf);	
+		cwd_inode = root_inode;
 		return SFS_DATA;
 	}
 
@@ -478,8 +523,7 @@ int sfs_getattr(const char *path, struct stat *statbuf)
 
 		return -ENOENT;
 	}
-	
-	
+		
 	memcpy( statbuf, &(inode_table[mapping].stat), sizeof(struct stat) );
 
     	return retstat;
@@ -507,7 +551,6 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	}
 
 	/* set file handle */
-	//memset(fi, 0, sizeof(struct fuse_file_info));
 	fi->fh = get_fh();
 	if(fi->fh < 0) {
 		return -EMFILE;
@@ -540,37 +583,41 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 	sprintf(name_table[mapping].path, path);
         name_table[mapping].st_ino = inode;
 
-        /* allocate disk block for file */
-        //disk_blocks[0] = ALLOCD;
-        //inode_table[0].blocks[0] = 0;
+	/* get info on current working directory */
+        char cwd_path[255];
+        memset(cwd_path, 0, 255);
+        get_cwd_path(path, cwd_path);
+        mapping = path_lookup(cwd_path);
+        cwd_inode = name_table[mapping].st_ino;
 
-	/* enter file into root directory  */
+	/* enter file into parent directory  */
 	int i = 0;
 	void *buf = malloc(BLOCK_SIZE);
 	memset(buf, 0, BLOCK_SIZE);
-	block_read(get_block_index(&(inode_table[root_inode]), i), buf);
-	// block_read(inode_table[root_inode].blocks[i], buf);
-	char *ptr = (char*)buf;	
-	while(*ptr != '\0') {	
-		ptr++;
-		// check to make sure we have not gone off the end of the block
-		// and read in a new block if needed
-		if ((void *)ptr >= buf + BLOCK_SIZE) {
-			block_read(get_block_index(&(inode_table[root_inode]),++i), buf);
-			// block_read(inode_table[root_inode].blocks[++i], buf);
-			ptr = (char*)buf;
-		}
-	}
-	/************************************************
- 	* Need to check if the new entry will exceed 	*
- 	* the buffer and require a new block to be 	*
- 	* allocated.					*
- 	* **********************************************/
+	block_read(get_block_index(&(inode_table[cwd_inode]), i), buf);
+        char *ptr = (char*)buf;
+        while(*ptr != '\0') {
+                ptr++;
+                // check to make sure we have not gone off the end of the block
+                // and read in a new block if needed
+                if ((void *)ptr >= buf + BLOCK_SIZE) {
+                        block_read(get_block_index(&(inode_table[cwd_inode]),++i), buf);
+                        ptr = (char*)buf;
+                }
+        }
+        /************************************************
+        * Need to check if the new entry will exceed    *
+        * the buffer and require a new block to be      *
+        * allocated.                                    *
+        * **********************************************/
 
-	sprintf(ptr, "%s/%i", path, inode);
-	block_write(get_block_index(&(inode_table[root_inode]), i), buf);
-	// block_write(inode_table[root_inode].blocks[i], buf);
-	inode_table[root_inode].stat.st_nlink++;
+        char name[255];
+        memset(name, 0, 255);
+        get_name(path, name);
+        sprintf(ptr, "/%s/%i", name, inode);
+
+        block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+        inode_table[cwd_inode].stat.st_nlink++;
 
     	return retstat;
 }
@@ -788,25 +835,13 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 			block = get_block();
 			if(block < 0) {
 				return -ENOMEM;
-			} else {
-
-				/********************************************************
- 				* I don't think the blocks need to be zeroed out, they	*
- 				* can probably just be added in metadata.		*
- 				* ******************************************************/
-				/*
-				block_read(block, block_buf);
-				memset(block_buf, 0, BLOCK_SIZE);
-				block_write(block, block_buf);
-				*/
-			}		
+			}
 	
 			if(i > MAX_FILE_BLOCKS) {
 				return -EFBIG;
 			}
 			
 			set_block_index(&(inode_table[open_files[fi->fh].st_ino]), i, block);
-			// inode_table[open_files[fi->fh].st_ino].blocks[i] = block;
 			i++;
 			blocks_left--;
 			stat->st_blocks++;
@@ -823,21 +858,7 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	memset(cont_buffer, 0, write_blocks*BLOCK_SIZE);
 	char *pos = (char*)cont_buffer;
 		
-
-	/****************************************
- 	* This seems a little unnecessary, 	*
- 	* I think only the first block actually	*
- 	* needs to be read in.  		*
- 	* **************************************/
-	/*
-	for(i = 0; i < write_blocks; i++) {
-		block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
-		pos += BLOCK_SIZE;
-	}
-	*/
-
 	block_read(get_block_index(&(inode_table[open_files[fi->fh].st_ino]), start_block), cont_buffer);
-	// block_read(inode_table[open_files[fi->fh].st_ino].blocks[start_block], cont_buffer);	
 	
 	/* write to continuous buffer */
 	memcpy(cont_buffer + block_offset, buf, size);
@@ -846,7 +867,6 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 	pos = (char*)cont_buffer;	
 	for(i = 0; i < write_blocks; i++) {
 		block_write(get_block_index(&(inode_table[open_files[fi->fh].st_ino]), start_block+i), (void *)pos);
-                // block_write(inode_table[open_files[fi->fh].st_ino].blocks[start_block+i], (void*)pos);
 		pos += BLOCK_SIZE;
         }
 
@@ -862,12 +882,81 @@ int sfs_write(const char *path, const char *buf, size_t size, off_t offset, stru
 /** Create a directory */
 int sfs_mkdir(const char *path, mode_t mode)
 {
-    int retstat = 0;
-    log_msg("\nsfs_mkdir(path=\"%s\", mode=0%3o)\n",
-	    path, mode);
-   
-    
-    return retstat;
+	int retstat = 0;
+    	log_msg("\nsfs_mkdir(path=\"%s\", mode=0%3o)\n", path, mode);
+  
+	if(path_lookup(path) > 0) {
+                return -EEXIST;
+        }
+
+
+        int inode = get_inode();
+
+        /* enter file  into inode table */
+        inode_table[inode].stat.st_mode = mode | S_IFDIR;
+        inode_table[inode].stat.st_nlink = 2;
+        inode_table[inode].stat.st_uid = getuid();
+        inode_table[inode].stat.st_gid = getgid();
+        inode_table[inode].stat.st_size = 512;
+        inode_table[inode].stat.st_blocks = 1;
+        inode_table[inode].stat.st_atime = time(NULL);
+        inode_table[inode].stat.st_mtime = time(NULL);
+        inode_table[inode].stat.st_ctime = time(NULL);
+	
+	inode_table[inode].blocks[0] = get_block();
+
+	/* enter file into name table */
+        int mapping = get_mapping();
+        if(mapping < 0) {
+                free_inode(inode);
+                return -ENOMEM;
+        }
+        sprintf(name_table[mapping].path, path);
+        name_table[mapping].st_ino = inode;
+
+	/* get info on current working directory */
+	char cwd_path[255];
+	memset(cwd_path, 0, 255);
+	get_cwd_path(path, cwd_path);
+        mapping = path_lookup(cwd_path);
+        cwd_inode = name_table[mapping].st_ino;
+
+	/* enter . and .. */
+	void *buf = malloc(BLOCK_SIZE);
+        memset(buf, 0, BLOCK_SIZE);
+	sprintf(buf, "./%i/../%i", inode, cwd_inode);
+        block_write(get_block_index(&(inode_table[inode]), 0), buf);
+
+        /* enter file into parent directory  */
+        int i = 0;
+        memset(buf, 0, BLOCK_SIZE);
+        
+	block_read(get_block_index(&(inode_table[cwd_inode]), i), buf);
+        char *ptr = (char*)buf;
+        while(*ptr != '\0') {
+                ptr++;
+                // check to make sure we have not gone off the end of the block
+                // and read in a new block if needed
+                if ((void *)ptr >= buf + BLOCK_SIZE) {
+                        block_read(get_block_index(&(inode_table[cwd_inode]),++i), buf);
+                        ptr = (char*)buf;
+                }
+        }
+        /************************************************
+        * Need to check if the new entry will exceed    *
+        * the buffer and require a new block to be      *
+        * allocated.                                    *
+        * **********************************************/
+
+	char name[255];
+	memset(name, 0, 255);
+	get_name(path, name);
+	sprintf(ptr, "/%s/%i", name, inode);
+
+	block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+        inode_table[cwd_inode].stat.st_nlink++;
+
+    	return retstat;
 }
 
 
@@ -881,7 +970,6 @@ int sfs_rmdir(const char *path)
     return retstat;
 }
 
-
 /** Open directory
  *
  * This method should check if the open operation is permitted for
@@ -891,11 +979,10 @@ int sfs_rmdir(const char *path)
  */
 int sfs_opendir(const char *path, struct fuse_file_info *fi)
 {
-    int retstat = 0;
-    log_msg("\nsfs_opendir(path=\"%s\", fi=0x%08x)\n", path, fi);
-    
-    
-    return retstat;
+    	int retstat = 0;
+    	log_msg("\nsfs_opendir(path=\"%s\", fi=0x%08x)\n", path, fi);
+   
+    	return retstat;
 }
 
 /** Read directory
