@@ -971,11 +971,59 @@ int sfs_mkdir(const char *path, mode_t mode)
 /** Remove a directory */
 int sfs_rmdir(const char *path)
 {
-    int retstat = 0;
-    log_msg("sfs_rmdir(path=\"%s\")\n", path);
-    
-    
-    return retstat;
+    	int retstat = 0;
+        log_msg("sfs_unlink(path=\"%s\")\n", path);
+
+        /* path lookup  */
+        int mapping = path_lookup(path);
+        if(mapping < 0) {
+                return -ENOENT;
+        }
+
+        /* update parent directory */
+        char *entry = malloc(MAX_PATH_LEN);
+        memset(entry, 0, MAX_PATH_LEN);
+        char name[255];
+        memset(name, 0, 255);
+        void *buf = malloc(BLOCK_SIZE);
+        memset(buf, 0, BLOCK_SIZE);
+        char cwd_path[255];
+        memset(cwd_path, 0, 255);
+
+        get_name(path, name);
+        sprintf(entry, "/%s/%i", name, name_table[mapping].st_ino);     // assemble directory entry to be removed
+
+        get_cwd_path(path, cwd_path);
+        int cwd_mapping = path_lookup(cwd_path);
+        cwd_inode = name_table[cwd_mapping].st_ino;
+
+        block_read(inode_table[cwd_inode].blocks[0], buf);
+	
+	/* test to see if directory is empty */
+	int i, count = 0;
+	char *pos = (char*)buf;
+	for(i = 0; i < strlen((char*)buf); i++) {
+	        if(pos[i] == '/') {
+			count++;
+		}
+	}
+
+	if(inode_table[name_table[mapping].st_ino].stat.st_nlink > 2) {
+		return -ENOTEMPTY;
+	}
+
+	removeSubstring((char*)buf, entry);
+        memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
+        block_write(inode_table[cwd_inode].blocks[0], buf);
+        inode_table[cwd_inode].stat.st_nlink--;
+
+        /* update tables  */
+        free_inode(name_table[mapping].st_ino);         // Eric please change this to your double indirection thing
+        free_mapping(mapping);
+
+	free(entry);
+	free(buf);
+        return retstat;	
 }
 
 /** Open directory
