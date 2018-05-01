@@ -53,7 +53,7 @@
 /***** MACROS *****/
 #define MAX_NODES 128
 #define MAX_LINK 128
-#define NUM_BLOCKS 2048
+#define NUM_BLOCKS 32768
 #define ALLOCD 1
 #define FREE 0
 #define KEY 0xA7C4144BEF51B825
@@ -592,7 +592,7 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
 	/* enter file into parent directory  */
 	int i = 0;
-	void *buf = malloc(BLOCK_SIZE);
+	void *buf = malloc(BLOCK_SIZE*2);
 	memset(buf, 0, BLOCK_SIZE);
 	block_read(get_block_index(&(inode_table[cwd_inode]), i), buf);
         char *ptr = (char*)buf;
@@ -612,11 +612,23 @@ int sfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         * **********************************************/
 
         char name[255];
+	short block;
+
         memset(name, 0, 255);
         get_name(path, name);
-        sprintf(ptr, "/%s/%i", name, inode);
+	sprintf(ptr, "/%s/%i", name, inode);
+	int size = strlen(ptr) + 1;
 
-        block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+       	block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+
+	// in case the new entry requires a new block to be allocated to the directory
+	if (inode_table[cwd_inode].stat.st_size%BLOCK_SIZE + size > BLOCK_SIZE) {
+		block = get_block();
+		set_block_index(&(inode_table[cwd_inode]), ++i, block);
+		block_write(block, buf+BLOCK_SIZE);
+	}
+
+	inode_table[cwd_inode].stat.st_size += size;
         inode_table[cwd_inode].stat.st_nlink++;
 
     	return retstat;
@@ -639,22 +651,38 @@ int sfs_unlink(const char *path)
 	memset(entry, 0, MAX_PATH_LEN);
 	char name[255];
 	memset(name, 0, 255);
-	void *buf = malloc(BLOCK_SIZE);
-        memset(buf, 0, BLOCK_SIZE);
 	char cwd_path[255];
 	memset(cwd_path, 0, 255);
 
 	get_name(path, name);
 	sprintf(entry, "/%s/%i", name, name_table[mapping].st_ino);	// assemble directory entry to be removed
-	
+
 	get_cwd_path(path, cwd_path);
 	int cwd_mapping = path_lookup(cwd_path);
 	cwd_inode = name_table[cwd_mapping].st_ino;
 
-	block_read(inode_table[cwd_inode].blocks[0], buf);	
+	int size = inode_table[cwd_inode].stat.st_size;
+	int blocks = size/BLOCK_SIZE + (size%BLOCK_SIZE) ? 1 : 0;
+	void * buf = malloc(BLOCK_SIZE*blocks);
+	memset(buf, 0, BLOCK_SIZE*blocks);
+	int i;
+	for (i = 0; i < blocks; i++) {
+		block_read(get_block_index(&(inode_table[cwd_inode]), i), buf + i*BLOCK_SIZE);	
+	}
 	removeSubstring((char*)buf, entry);
-	memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
-	block_write(inode_table[cwd_inode].blocks[0], buf);
+	int resize = BLOCK_SIZE-strlen((char*)buf);
+	memset(buf+strlen((char*)buf), 0, resize);
+
+	for (i=0; i < blocks; i++) {
+		block_write(get_block_index(&(inode_table[cwd_inode]), i), buf + i*BLOCK_SIZE);
+	}
+
+	// if the resize frees up a block, free said block in the metadata
+	if (size/BLOCK_SIZE > (size - resize)/BLOCK_SIZE) {
+		disk_blocks[get_block_index(&(inode_table[cwd_inode]), i)] = FREE;
+		set_block_index(&(inode_table[cwd_inode]), i, -1);
+	}
+	inode_table[cwd_inode].stat.st_size -= resize;
 	inode_table[cwd_inode].stat.st_nlink--;
 
 	/* update tables  */
@@ -956,12 +984,24 @@ int sfs_mkdir(const char *path, mode_t mode)
         * allocated.                                    *
         * **********************************************/
 
-	char name[255];
-	memset(name, 0, 255);
-	get_name(path, name);
-	sprintf(ptr, "/%s/%i", name, inode);
+        char name[255];
+        short block;
 
-	block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+        memset(name, 0, 255);
+        get_name(path, name);
+        sprintf(ptr, "/%s/%i", name, inode);
+        int size = strlen(ptr) + 1;
+
+        block_write(get_block_index(&(inode_table[cwd_inode]), i), buf);
+
+        // in case the new entry requires a new block to be allocated to the directory
+        if (inode_table[cwd_inode].stat.st_size%BLOCK_SIZE + size > BLOCK_SIZE) {
+        	block = get_block();
+                set_block_index(&(inode_table[cwd_inode]), ++i, block);
+                block_write(block, buf+BLOCK_SIZE);
+        }
+        
+        inode_table[cwd_inode].stat.st_size += size;
         inode_table[cwd_inode].stat.st_nlink++;
 
     	return retstat;
@@ -985,8 +1025,6 @@ int sfs_rmdir(const char *path)
         memset(entry, 0, MAX_PATH_LEN);
         char name[255];
         memset(name, 0, 255);
-        void *buf = malloc(BLOCK_SIZE);
-        memset(buf, 0, BLOCK_SIZE);
         char cwd_path[255];
         memset(cwd_path, 0, 255);
 
@@ -997,10 +1035,17 @@ int sfs_rmdir(const char *path)
         int cwd_mapping = path_lookup(cwd_path);
         cwd_inode = name_table[cwd_mapping].st_ino;
 
-        block_read(inode_table[cwd_inode].blocks[0], buf);
-	
+        int size = inode_table[cwd_inode].stat.st_size;
+        int blocks = size/BLOCK_SIZE + (size%BLOCK_SIZE) ? 1 : 0;
+        void * buf = malloc(BLOCK_SIZE*blocks);
+	memset(buf, 0, BLOCK_SIZE*blocks);
+        int i;
+        for (i = 0; i < blocks; i++) {
+                block_read(get_block_index(&(inode_table[cwd_inode]), i), buf + i*BLOCK_SIZE);
+        }
+
 	/* test to see if directory is empty */
-	int i, count = 0;
+	int count = 0;
 	char *pos = (char*)buf;
 	for(i = 0; i < strlen((char*)buf); i++) {
 	        if(pos[i] == '/') {
@@ -1012,9 +1057,20 @@ int sfs_rmdir(const char *path)
 		return -ENOTEMPTY;
 	}
 
-	removeSubstring((char*)buf, entry);
-        memset(buf+strlen((char*)buf), 0, BLOCK_SIZE-strlen((char*)buf));
-        block_write(inode_table[cwd_inode].blocks[0], buf);
+        removeSubstring((char*)buf, entry);
+        int resize = BLOCK_SIZE-strlen((char*)buf);
+        memset(buf+strlen((char*)buf), 0, resize);
+
+        for (i=0; i < blocks; i++) {
+                block_write(get_block_index(&(inode_table[cwd_inode]), i), buf + i*BLOCK_SIZE);
+        }
+
+        // if the resize frees up a block, free said block in the metadata
+        if (size/BLOCK_SIZE > (size - resize)/BLOCK_SIZE) {
+        	disk_blocks[get_block_index(&(inode_table[cwd_inode]), i)] = FREE;
+                set_block_index(&(inode_table[cwd_inode]), i, -1);
+        }
+        inode_table[cwd_inode].stat.st_size -= resize;
         inode_table[cwd_inode].stat.st_nlink--;
 
         /* update tables  */
@@ -1072,8 +1128,12 @@ int sfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offse
 	
 	st_ino = name_table[mapping].st_ino;
 
-	char *entry_list = malloc(BLOCK_SIZE), *tok;
-	block_read(inode_table[st_ino].blocks[0] , entry_list);
+	int i, blocks = inode_table[st_ino].stat.st_size/BLOCK_SIZE + (inode_table[st_ino].stat.st_size%BLOCK_SIZE) ? 1 : 0;
+
+	char *entry_list = malloc(BLOCK_SIZE*blocks), *tok;
+	for (i = 0; i < blocks; i++) {
+		block_read(inode_table[st_ino].blocks[0] , entry_list + i*BLOCK_SIZE);
+	}
 	
 	tok = strtok(entry_list, "/");
 
